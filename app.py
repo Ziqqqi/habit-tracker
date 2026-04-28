@@ -2321,7 +2321,7 @@ with st.expander("Add a New Habit", expanded=False):
     with st.form("add_habit_form", clear_on_submit=True):
         new_habit = st.text_input(
             "Habit name",
-            placeholder="e.g. Drink water, Running, Face mask"
+            placeholder="e.g. Drink water, Running, Face mask",
         )
 
         col1, col2 = st.columns(2)
@@ -2329,7 +2329,7 @@ with st.expander("Add a New Habit", expanded=False):
             habit_type = st.selectbox(
                 "Habit type",
                 options=["count", "completion"],
-                format_func=lambda x: "Count" if x == "count" else "Completion"
+                format_func=lambda x: "Count" if x == "count" else "Completion",
             )
         with col2:
             frequency_type = st.selectbox(
@@ -2340,29 +2340,25 @@ with st.expander("Add a New Habit", expanded=False):
                     "x_per_week": "X times / week",
                     "every_n_days": "Every N days",
                     "weekly": "Weekly"
-                }[x]
+                }[x],
             )
 
-        add_cfg = get_frequency_form_config(frequency_type)
-        if add_cfg["show_frequency_input"]:
+        freq_col1, freq_col2 = st.columns(2)
+        with freq_col1:
             frequency_value = st.number_input(
-                add_cfg["frequency_label"],
+                "Frequency value (N)",
                 min_value=1,
-                value=int(add_cfg["frequency_value"]),
+                value=1,
+                step=1,
+                help="For 'X times/week' or 'Every N days'. Ignored for Daily/Weekly.",
+            )
+        with freq_col2:
+            target_count = st.number_input(
+                "Target count per period",
+                min_value=1,
+                value=1,
                 step=1,
             )
-        else:
-            frequency_value = int(add_cfg["frequency_value"])
-            st.caption(add_cfg["period_note"])
-
-        target_count = st.number_input(
-            add_cfg["target_label"],
-            min_value=1,
-            value=int(add_cfg["target_value"]),
-            step=1,
-        )
-        if add_cfg["show_frequency_input"]:
-            st.caption(add_cfg["period_note"])
 
         reminder_bucket = st.selectbox(
             "Time of day",
@@ -2377,38 +2373,43 @@ with st.expander("Add a New Habit", expanded=False):
             "Group",
             options=existing_groups + [create_new_group_label],
             index=0,
-            help="Choose an existing group, or create a new one.",
+            help="Choose an existing group, or select '+ Create new group'.",
         )
-        if group_choice == create_new_group_label:
-            habit_group = st.text_input(
-                "New group name",
-                placeholder="e.g. Lifestyle, Fitness, Learning"
-            )
-        else:
-            habit_group = group_choice
+        habit_group_custom = st.text_input(
+            "New group name",
+            placeholder="e.g. Lifestyle, Fitness, Learning",
+            help="Only used if '+ Create new group' is selected above.",
+        )
 
         schedule_mode = "none"
-        selected_days = []
-        if frequency_type in {"x_per_week", "weekly"}:
-            use_weekdays = st.checkbox(
-                "Use scheduled weekdays",
-                value=(frequency_type == "weekly"),
-                help="Show due / upcoming states based on specific weekdays.",
-            )
-            if use_weekdays:
-                schedule_mode = "weekdays"
-                selected_days = st.multiselect(
-                    "Scheduled weekdays",
-                    options=[idx for idx, _ in WEEKDAY_OPTIONS],
-                    default=([0] if frequency_type == "weekly" else []),
-                    format_func=lambda x: WEEKDAY_LABEL_MAP[x],
-                )
-                if frequency_type == "weekly" and len(selected_days) > 1:
-                    st.caption("Weekly habits use the first selected weekday as the due day.")
+        use_weekdays = st.checkbox(
+            "Use scheduled weekdays",
+            value=False,
+            help="For weekly/x-per-week habits — show due/upcoming states on specific days.",
+        )
+        selected_days = st.multiselect(
+            "Scheduled weekdays",
+            options=[idx for idx, _ in WEEKDAY_OPTIONS],
+            default=[],
+            format_func=lambda x: WEEKDAY_LABEL_MAP[x],
+        )
 
-        submitted = st.form_submit_button("Add habit", width="stretch", type="primary")
+        submitted = st.form_submit_button("Add habit", use_container_width=True, type="primary")
 
         if submitted:
+            # Resolve group
+            if group_choice == create_new_group_label:
+                habit_group = habit_group_custom.strip() or DEFAULT_HABIT_GROUP
+            else:
+                habit_group = group_choice
+
+            # Resolve schedule
+            if use_weekdays and frequency_type in {"x_per_week", "weekly"}:
+                schedule_mode = "weekdays"
+            else:
+                schedule_mode = "none"
+                selected_days = []
+
             if new_habit.strip():
                 result = add_habit(
                     name=new_habit,
@@ -2422,10 +2423,10 @@ with st.expander("Add a New Habit", expanded=False):
                     habit_group=habit_group,
                 )
                 if result == "Habit added.":
-                    st.success(f"Added habit: {new_habit.strip()}")
+                    st.success(f"Added: {new_habit.strip()}")
                     st.rerun()
                 elif result == "Habit restored.":
-                    st.success(f"Restored habit: {new_habit.strip()}")
+                    st.success(f"Restored: {new_habit.strip()}")
                     st.rerun()
                 else:
                     st.warning(result)
@@ -2836,6 +2837,12 @@ with st.expander("Current Progress", expanded=False):
                                         st.success("Saved.")
                                         st.rerun()
                                 if close_clicked:
+                                    # Clear manage session state to reset fields on next open
+                                    for k in [name_key, type_key, freq_key, freq_value_key,
+                                              target_key, schedule_enabled_key, schedule_days_key,
+                                              reminder_bucket_key, habit_group_key, habit_link_key]:
+                                        if k in st.session_state:
+                                            del st.session_state[k]
                                     st.rerun()
                                 if hide_clicked:
                                     deactivate_habit(habit_id)
