@@ -2809,13 +2809,11 @@ with st.expander("Current Progress", expanded=False):
                                     placeholder="https://youtube.com/watch?v=...",
                                 )
 
-                                save_col1, save_col2, save_col3 = st.columns(3)
+                                save_col1, save_col2 = st.columns(2)
                                 with save_col1:
                                     save_clicked = st.button("Save", key=f"save_manage_{habit_id}", width="stretch", type="primary")
                                 with save_col2:
-                                    close_clicked = st.button("Close", key=f"close_manage_{habit_id}", width="stretch", type="secondary")
-                                with save_col3:
-                                    hide_clicked = st.button("Hide", key=f"hide_manage_{habit_id}", width="stretch", type="secondary")
+                                    hide_clicked = st.button("Hide habit", key=f"hide_manage_{habit_id}", width="stretch", type="secondary")
 
                                 if save_clicked:
                                     error = update_habit(
@@ -2836,14 +2834,6 @@ with st.expander("Current Progress", expanded=False):
                                     else:
                                         st.success("Saved.")
                                         st.rerun()
-                                if close_clicked:
-                                    # Clear manage session state to reset fields on next open
-                                    for k in [name_key, type_key, freq_key, freq_value_key,
-                                              target_key, schedule_enabled_key, schedule_days_key,
-                                              reminder_bucket_key, habit_group_key, habit_link_key]:
-                                        if k in st.session_state:
-                                            del st.session_state[k]
-                                    st.rerun()
                                 if hide_clicked:
                                     deactivate_habit(habit_id)
                                     st.rerun()
