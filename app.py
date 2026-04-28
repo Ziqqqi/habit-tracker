@@ -2593,8 +2593,15 @@ with st.expander("Current Progress", expanded=False):
                         </div>
                         """, unsafe_allow_html=True)
 
-                        # Primary action button — tight, right-aligned
-                        btn_col, _ = st.columns([1, 2])
+                        # Primary action button + optional link button
+                        habit_link = row.get("habit_link", "") or ""
+                        if habit_link:
+                            safe_link = habit_link if habit_link.startswith(("http://", "https://")) else f"https://{habit_link}"
+                            btn_col, link_col, _ = st.columns([1.2, 0.8, 1])
+                        else:
+                            btn_col, _ = st.columns([1, 2])
+                            link_col = None
+
                         with btn_col:
                             if is_single_completion:
                                 if done_this_period:
@@ -2610,10 +2617,17 @@ with st.expander("Current Progress", expanded=False):
                                 if st.button("+ Check in", key=f"log_{habit_id}", width="stretch", type="primary"):
                                     log_habit(habit_id, count=1)
                                     st.rerun()
-                            else:  # multi completion
+                            else:
                                 if st.button("+ Session", key=f"log_{habit_id}", width="stretch", type="primary"):
                                     log_habit(habit_id, count=1)
                                     st.rerun()
+
+                        if link_col:
+                            with link_col:
+                                st.markdown(
+                                    f'<a href="{safe_link}" target="_blank" class="habit-link-btn" style="display:flex;align-items:center;justify-content:center;height:2.1rem;border-radius:var(--ht-radius);font-size:0.82rem;">▶ Open</a>',
+                                    unsafe_allow_html=True,
+                                )
 
                         # Secondary actions + Manage inside expander
                         with st.expander("More", expanded=False):
@@ -2666,12 +2680,6 @@ with st.expander("Current Progress", expanded=False):
                                     if st.button("Log for date", key=f"log_custom_{habit_id}", width="stretch"):
                                         log_habit(habit_id, count=1, log_date=_custom_d)
                                         st.rerun()
-
-                            # Link button if set
-                            habit_link = row.get("habit_link", "") or ""
-                            if habit_link:
-                                safe_link = habit_link if habit_link.startswith(("http://", "https://")) else f"https://{habit_link}"
-                                st.markdown(f'<a href="{safe_link}" target="_blank" class="habit-link-btn">▶ Open link</a>', unsafe_allow_html=True)
 
                             # Manage
                             with st.expander("Manage", expanded=False):
