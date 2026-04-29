@@ -1353,18 +1353,18 @@ def build_calendar_heatmap_html(habit, month_start: date, month_end: date):
     return f'<div class="calendar-grid">{header_html}{cells_html}</div>'
 
 
-def get_review_preview(progress_rows: list) -> tuple[list, list]:
-    """Return (today_done, tomorrow_due) for Review & Preview card.
+def get_review_preview(progress_rows: list) -> tuple[list, list, list]:
+    """Return (today_all, today_done, tomorrow_due) for Review & Preview card.
 
-    today_done  — habits completed for their current period today.
-    tomorrow_due — habits that will need a check-in tomorrow:
-                   daily habits not yet done, weekly/scheduled habits due tomorrow,
-                   x_per_week habits still behind pace by tomorrow.
+    today_all    — all habits relevant today (done + not done), for display.
+    today_done   — habits completed this period, for time calculation only.
+    tomorrow_due — habits that will need a check-in tomorrow.
     """
     today = date.today()
     tomorrow = today + timedelta(days=1)
     tomorrow_idx = tomorrow.weekday()
 
+    today_all = []
     today_done = []
     tomorrow_due = []
 
@@ -1376,44 +1376,59 @@ def get_review_preview(progress_rows: list) -> tuple[list, list]:
         scheduled_days = parse_scheduled_days(row.get("scheduled_days", ""))
         is_done = current_count >= target_count
 
-        # ── Today done ──
-        # For daily: completed today's target
-        # For others: period target met and at least one log exists today
-        if is_done:
-            today_done.append(row)
-            continue  # done habits don't go into tomorrow
-
-        # ── Tomorrow due ──
+        # ── Today all ──
+        # Daily: always relevant today
+        # Weekly/x_per_week scheduled: only if today is a scheduled day or due day
+        # Every_n_days: always relevant if period is active
+        include_today = False
         if frequency_type == "daily":
-            # Daily habits always need doing tomorrow
-            tomorrow_due.append(row)
-
+            include_today = True
         elif frequency_type in {"x_per_week", "weekly"}:
             if schedule_mode == "weekdays" and scheduled_days:
+                today_idx = today.weekday()
                 if frequency_type == "weekly":
                     due_day = scheduled_days[0]
-                    due_date = get_week_start(tomorrow) + timedelta(days=due_day)
-                    if due_date == tomorrow:
-                        tomorrow_due.append(row)
-                else:  # x_per_week scheduled
-                    if tomorrow_idx in scheduled_days:
-                        tomorrow_due.append(row)
+                    due_date = get_week_start(today) + timedelta(days=due_day)
+                    include_today = (today == due_date or is_done)
+                else:
+                    include_today = (today_idx in scheduled_days or is_done)
             else:
-                # Unscheduled: show if still behind pace by tomorrow
-                remaining = max(0, target_count - current_count)
-                days_left_after_tomorrow = 7 - tomorrow_idx  # days incl. tomorrow
-                if remaining > 0 and remaining >= days_left_after_tomorrow:
-                    tomorrow_due.append(row)
-
+                include_today = True  # unscheduled weekly — always show
         elif frequency_type == "every_n_days":
-            # Show if the period is still active tomorrow (period doesn't end today)
-            tomorrow_due.append(row)
+            include_today = True
 
-    # Sort both lists by reminder_bucket time-of-day order
+        if include_today:
+            today_all.append(row)
+            if is_done:
+                today_done.append(row)
+
+        # ── Tomorrow due ──
+        if not is_done:
+            if frequency_type == "daily":
+                tomorrow_due.append(row)
+            elif frequency_type in {"x_per_week", "weekly"}:
+                if schedule_mode == "weekdays" and scheduled_days:
+                    if frequency_type == "weekly":
+                        due_day = scheduled_days[0]
+                        due_date = get_week_start(tomorrow) + timedelta(days=due_day)
+                        if due_date == tomorrow:
+                            tomorrow_due.append(row)
+                    else:
+                        if tomorrow_idx in scheduled_days:
+                            tomorrow_due.append(row)
+                else:
+                    remaining = max(0, target_count - current_count)
+                    days_left_after_tomorrow = 7 - tomorrow_idx
+                    if remaining > 0 and remaining >= days_left_after_tomorrow:
+                        tomorrow_due.append(row)
+            elif frequency_type == "every_n_days":
+                tomorrow_due.append(row)
+
     bucket_order = {"morning": 0, "afternoon": 1, "evening": 2, "anytime": 3}
+    today_all.sort(key=lambda x: bucket_order.get(x["reminder_bucket"], 3))
     today_done.sort(key=lambda x: bucket_order.get(x["reminder_bucket"], 3))
     tomorrow_due.sort(key=lambda x: bucket_order.get(x["reminder_bucket"], 3))
-    return today_done, tomorrow_due
+    return today_all, today_done, tomorrow_due
 
 
 def compute_time_summary(rows: list) -> tuple[int, dict]:
@@ -2561,29 +2576,26 @@ with st.expander("Add a New Habit", expanded=False):
 # ── Review & Preview ──
 with st.expander("Review & Preview", expanded=False):
     _progress_for_rp = get_current_progress()
-    today_done, tomorrow_due = get_review_preview(_progress_for_rp)
+    today_all, today_done, tomorrow_due = get_review_preview(_progress_for_rp)
 
     today_label = date.today().strftime("%b %d")
     tomorrow_label = (date.today() + timedelta(days=1)).strftime("%b %d")
 
-    # Time summaries
-    today_total_mins, today_by_group = compute_time_summary(today_done)
+    # Time summaries — today uses today_all for display, today_done for "done" calc
+    today_total_mins, today_by_group = compute_time_summary(today_all)
     tomorrow_total_mins, tomorrow_by_group = compute_time_summary(tomorrow_due)
 
-    # Also compute completed vs remaining for today
     today_done_mins = sum(
         int(r.get("estimated_minutes", 0) or 0)
         for r in today_done
         if r.get("track_time") and int(r.get("estimated_minutes", 0) or 0) > 0
     )
-    # "remaining" = tomorrow_due rows that are daily (still need to do today too)
     today_remaining_mins = sum(
         int(r.get("estimated_minutes", 0) or 0)
-        for r in _progress_for_rp
+        for r in today_all
         if r.get("track_time")
         and int(r.get("estimated_minutes", 0) or 0) > 0
         and int(r.get("current_count", 0) or 0) < int(r.get("target_count", 1) or 1)
-        and r.get("frequency_type") == "daily"
     )
 
     def rp_col_html(rows, side, total_mins, by_group, done_mins, remaining_mins, color, accent):
@@ -2662,7 +2674,7 @@ with st.expander("Review & Preview", expanded=False):
                 <div class="rp-col-title today">
                     <span class="rp-dot today"></span>Today · {today_label}
                 </div>
-                {rp_col_html(today_done, "today", today_total_mins, today_by_group, today_done_mins, today_remaining_mins, "#1a5c30", "#1a5c30")}
+                {rp_col_html(today_all, "today", today_total_mins, today_by_group, today_done_mins, today_remaining_mins, "#1a5c30", "#1a5c30")}
             </div>
             <div class="rp-col">
                 <div class="rp-col-title tomorrow">
@@ -2840,7 +2852,7 @@ with st.expander("Current Progress", expanded=False):
                                 )
 
                         # Secondary actions + Manage inside expander
-                        with st.expander("More", expanded=False):
+                        with st.expander("···", expanded=False):
 
                             if is_duration:
                                 st.markdown('<div class="action-note">Quick log</div>', unsafe_allow_html=True)
