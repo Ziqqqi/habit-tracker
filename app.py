@@ -3086,7 +3086,7 @@ with st.expander("Recent log details", expanded=False):
                     st.rerun()
 
 
-analytics_habits = get_active_habits(user_id=user_id)
+analytics_habits = get_active_habits(user_id=current_user_id)
 analytics_habit_map = {habit["id"]: habit for habit in analytics_habits}
 analytics_options = [habit["id"] for habit in analytics_habits]
 selected_analytics_habit_id = None
