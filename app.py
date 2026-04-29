@@ -174,7 +174,25 @@ def init_db():
             ADD COLUMN habit_link TEXT DEFAULT ''
         """)
 
-    # Backfill old rows so v1 habits become valid v2 habits
+    if not column_exists(cur, "habits", "track_time"):
+        cur.execute("""
+            ALTER TABLE habits
+            ADD COLUMN track_time INTEGER DEFAULT 0
+        """)
+
+    if not column_exists(cur, "habits", "estimated_minutes"):
+        cur.execute("""
+            ALTER TABLE habits
+            ADD COLUMN estimated_minutes INTEGER DEFAULT 0
+        """)
+
+    # Backfill: duration habits always track time, use target_count as estimated_minutes
+    cur.execute("""
+        UPDATE habits
+        SET track_time = 1,
+            estimated_minutes = target_count
+        WHERE habit_type = 'duration' AND track_time = 0
+    """)
     cur.execute("""
         UPDATE habits
         SET habit_type = COALESCE(habit_type, 'count')
@@ -225,6 +243,8 @@ def normalize_habit_inputs(
     reminder_bucket: str = "anytime",
     habit_group: str = DEFAULT_HABIT_GROUP,
     habit_link: str = "",
+    track_time: bool = False,
+    estimated_minutes: int = 0,
 ):
     """Basic validation and normalization for v4 habit settings."""
     valid_habit_types = {"count", "completion", "duration"}
@@ -260,6 +280,14 @@ def normalize_habit_inputs(
         schedule_mode = "none"
         parsed_days = []
 
+    # Duration habits always track time using target_count as estimate
+    if habit_type == "duration":
+        track_time = True
+        estimated_minutes = int(target_count)
+    else:
+        track_time = bool(track_time)
+        estimated_minutes = max(0, int(estimated_minutes or 0))
+
     normalized = {
         "habit_type": habit_type,
         "frequency_type": frequency_type,
@@ -271,6 +299,8 @@ def normalize_habit_inputs(
         "reminder_bucket": normalize_reminder_bucket(reminder_bucket),
         "habit_group": normalize_habit_group(habit_group),
         "habit_link": (habit_link or "").strip(),
+        "track_time": 1 if track_time else 0,
+        "estimated_minutes": estimated_minutes,
     }
     return normalized, None
 
@@ -286,6 +316,8 @@ def add_habit(
     reminder_bucket: str = "anytime",
     habit_group: str = DEFAULT_HABIT_GROUP,
     habit_link: str = "",
+    track_time: bool = False,
+    estimated_minutes: int = 0,
 ):
     """Add a new habit, or reactivate it if it already exists but is inactive."""
     clean_name = name.strip()
@@ -302,6 +334,8 @@ def add_habit(
         reminder_bucket=reminder_bucket,
         habit_group=habit_group,
         habit_link=habit_link,
+        track_time=track_time,
+        estimated_minutes=estimated_minutes,
     )
     if error:
         return error
@@ -333,7 +367,9 @@ def add_habit(
                     scheduled_days = ?,
                     reminder_bucket = ?,
                     habit_group = ?,
-                    habit_link = ?
+                    habit_link = ?,
+                    track_time = ?,
+                    estimated_minutes = ?
                 WHERE id = ?
             """, (
                 normalized["habit_type"],
@@ -346,6 +382,8 @@ def add_habit(
                 normalized["reminder_bucket"],
                 normalized["habit_group"],
                 normalized["habit_link"],
+                normalized["track_time"],
+                normalized["estimated_minutes"],
                 existing["id"],
             ))
             conn.commit()
@@ -355,9 +393,11 @@ def add_habit(
     cur.execute("""
         INSERT INTO habits (
             name, created_at, is_active,
-            daily_target, habit_type, frequency_type, frequency_value, target_count, schedule_mode, scheduled_days, reminder_bucket, habit_group, habit_link
+            daily_target, habit_type, frequency_type, frequency_value, target_count,
+            schedule_mode, scheduled_days, reminder_bucket, habit_group, habit_link,
+            track_time, estimated_minutes
         )
-        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         clean_name,
         datetime.now().isoformat(),
@@ -371,6 +411,8 @@ def add_habit(
         normalized["reminder_bucket"],
         normalized["habit_group"],
         normalized["habit_link"],
+        normalized["track_time"],
+        normalized["estimated_minutes"],
     ))
 
     conn.commit()
@@ -385,19 +427,10 @@ def get_active_habits():
 
     cur.execute("""
         SELECT
-            id,
-            name,
-            created_at,
-            daily_target,
-            habit_type,
-            frequency_type,
-            frequency_value,
-            target_count,
-            schedule_mode,
-            scheduled_days,
-            reminder_bucket,
-            habit_group,
-            habit_link
+            id, name, created_at, daily_target,
+            habit_type, frequency_type, frequency_value, target_count,
+            schedule_mode, scheduled_days, reminder_bucket, habit_group,
+            habit_link, track_time, estimated_minutes
         FROM habits
         WHERE is_active = 1
         ORDER BY created_at ASC
@@ -588,10 +621,11 @@ def update_habit(
     reminder_bucket: str = "anytime",
     habit_group: str = DEFAULT_HABIT_GROUP,
     habit_link: str = "",
+    track_time: bool = False,
+    estimated_minutes: int = 0,
 ):
-    """Update habit settings for v2."""
+    """Update habit settings."""
     clean_name = new_name.strip()
-
     if not clean_name:
         return "Habit name cannot be empty."
 
@@ -605,6 +639,8 @@ def update_habit(
         reminder_bucket=reminder_bucket,
         habit_group=habit_group,
         habit_link=habit_link,
+        track_time=track_time,
+        estimated_minutes=estimated_minutes,
     )
     if error:
         return error
@@ -615,32 +651,20 @@ def update_habit(
     try:
         cur.execute("""
             UPDATE habits
-            SET
-                name = ?,
-                habit_type = ?,
-                frequency_type = ?,
-                frequency_value = ?,
-                target_count = ?,
-                daily_target = ?,
-                schedule_mode = ?,
-                scheduled_days = ?,
-                reminder_bucket = ?,
-                habit_group = ?,
-                habit_link = ?
+            SET name = ?, habit_type = ?, frequency_type = ?, frequency_value = ?,
+                target_count = ?, daily_target = ?, schedule_mode = ?, scheduled_days = ?,
+                reminder_bucket = ?, habit_group = ?, habit_link = ?,
+                track_time = ?, estimated_minutes = ?
             WHERE id = ?
         """, (
             clean_name,
-            normalized["habit_type"],
-            normalized["frequency_type"],
-            normalized["frequency_value"],
-            normalized["target_count"],
-            normalized["daily_target"],
-            normalized["schedule_mode"],
-            normalized["scheduled_days"],
-            normalized["reminder_bucket"],
-            normalized["habit_group"],
-            normalized["habit_link"],
-            habit_id
+            normalized["habit_type"], normalized["frequency_type"],
+            normalized["frequency_value"], normalized["target_count"],
+            normalized["daily_target"], normalized["schedule_mode"],
+            normalized["scheduled_days"], normalized["reminder_bucket"],
+            normalized["habit_group"], normalized["habit_link"],
+            normalized["track_time"], normalized["estimated_minutes"],
+            habit_id,
         ))
         conn.commit()
         return None
@@ -835,6 +859,8 @@ def get_current_progress():
         reminder_bucket = (habit["reminder_bucket"] if "reminder_bucket" in habit.keys() else "anytime") or "anytime"
         habit_group = normalize_habit_group(habit["habit_group"] if "habit_group" in habit.keys() else DEFAULT_HABIT_GROUP)
         habit_link = (habit["habit_link"] if "habit_link" in habit.keys() else "") or ""
+        track_time = int(habit["track_time"] if "track_time" in habit.keys() else 0) == 1
+        estimated_minutes = int(habit["estimated_minutes"] if "estimated_minutes" in habit.keys() else 0) or 0
         anchor_date = get_created_date_from_habit(habit)
 
         period = get_current_period_info(frequency_type, frequency_value, anchor_date)
@@ -881,6 +907,8 @@ def get_current_progress():
             "reminder_label": format_reminder_bucket_label(reminder_bucket),
             "habit_group": habit_group,
             "habit_link": habit_link,
+            "track_time": track_time,
+            "estimated_minutes": estimated_minutes,
         })
 
     conn.close()
@@ -1386,6 +1414,20 @@ def get_review_preview(progress_rows: list) -> tuple[list, list]:
     today_done.sort(key=lambda x: bucket_order.get(x["reminder_bucket"], 3))
     tomorrow_due.sort(key=lambda x: bucket_order.get(x["reminder_bucket"], 3))
     return today_done, tomorrow_due
+
+
+def compute_time_summary(rows: list) -> tuple[int, dict]:
+    """Return (total_minutes, {group: minutes}) for rows that track time."""
+    total = 0
+    by_group: dict[str, int] = {}
+    for row in rows:
+        mins = int(row.get("estimated_minutes", 0) or 0)
+        if not row.get("track_time") or mins <= 0:
+            continue
+        total += mins
+        group = row.get("habit_group", DEFAULT_HABIT_GROUP)
+        by_group[group] = by_group.get(group, 0) + mins
+    return total, by_group
 
 
 def get_calendar_note_text(habit) -> str:
@@ -2241,6 +2283,57 @@ hr {
     font-style: italic;
 }
 
+.rp-time-summary {
+    font-size: 0.75rem;
+    margin-bottom: 0.4rem;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.rp-time-badge {
+    display: inline-block;
+    padding: 0.12rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.rp-group-breakdown {
+    margin-bottom: 0.4rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--ht-line-2);
+}
+
+.rp-group-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.12rem 0;
+}
+
+.rp-group-name {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--ht-ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.rp-group-mins {
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-family: var(--ht-mono);
+}
+
+.rp-item-mins {
+    font-size: 0.7rem;
+    font-weight: 600;
+    font-family: var(--ht-mono);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
 @media (max-width: 520px) {
     .rp-grid { grid-template-columns: 1fr; }
 }
@@ -2413,6 +2506,19 @@ with st.expander("Add a New Habit", expanded=False):
             format_func=lambda x: WEEKDAY_LABEL_MAP[x],
         )
 
+        track_time = st.checkbox(
+            "Track time for this habit",
+            value=False,
+            help="Include this habit's estimated duration in Review & Preview time totals.",
+        )
+        estimated_minutes = 0
+        if track_time and habit_type != "duration":
+            estimated_minutes = st.number_input(
+                "Estimated duration (min)",
+                min_value=1, max_value=480, value=30, step=5,
+                help="How many minutes does this habit take?",
+            )
+
         submitted = st.form_submit_button("Add habit", use_container_width=True, type="primary")
 
         if submitted:
@@ -2440,6 +2546,8 @@ with st.expander("Add a New Habit", expanded=False):
                     scheduled_days=selected_days,
                     reminder_bucket=reminder_bucket,
                     habit_group=habit_group,
+                    track_time=bool(track_time),
+                    estimated_minutes=int(estimated_minutes),
                 )
                 if result == "Habit added.":
                     st.success(f"Added: {new_habit.strip()}")
@@ -2462,23 +2570,77 @@ with st.expander("Review & Preview", expanded=False):
     today_label = date.today().strftime("%b %d")
     tomorrow_label = (date.today() + timedelta(days=1)).strftime("%b %d")
 
-    def rp_items_html(rows, side):
+    # Time summaries
+    today_total_mins, today_by_group = compute_time_summary(today_done)
+    tomorrow_total_mins, tomorrow_by_group = compute_time_summary(tomorrow_due)
+
+    # Also compute completed vs remaining for today
+    today_done_mins = sum(
+        int(r.get("estimated_minutes", 0) or 0)
+        for r in today_done
+        if r.get("track_time") and int(r.get("estimated_minutes", 0) or 0) > 0
+    )
+    # "remaining" = tomorrow_due rows that are daily (still need to do today too)
+    today_remaining_mins = sum(
+        int(r.get("estimated_minutes", 0) or 0)
+        for r in _progress_for_rp
+        if r.get("track_time")
+        and int(r.get("estimated_minutes", 0) or 0) > 0
+        and int(r.get("current_count", 0) or 0) < int(r.get("target_count", 1) or 1)
+        and r.get("frequency_type") == "daily"
+    )
+
+    def time_badge(mins: int, color: str) -> str:
+        if mins <= 0:
+            return ""
+        return f'<span class="rp-time-badge" style="color:{color};background:{color}18;border:1px solid {color}30;">{mins} min</span>'
+
+    def group_breakdown_html(by_group: dict, color: str) -> str:
+        if not by_group:
+            return ""
+        items = "".join(
+            f'<div class="rp-group-row"><span class="rp-group-name">{g}</span><span class="rp-group-mins" style="color:{color};">{m} min</span></div>'
+            for g, m in sorted(by_group.items())
+        )
+        return f'<div class="rp-group-breakdown">{items}</div>'
+
+    def rp_items_html(rows, side, by_group, color):
+        out = []
+        # Group breakdown first if there's time data
+        if by_group:
+            out.append(group_breakdown_html(by_group, color))
         if not rows:
             label = "All clear — nothing yet" if side == "today" else "Nothing scheduled"
-            return f'<div class="rp-empty">{label}</div>'
-        out = []
+            out.append(f'<div class="rp-empty">{label}</div>')
+            return "".join(out)
         for row in rows:
             name = row["habit_name"]
             reminder = row["reminder_label"]
+            mins = int(row.get("estimated_minutes", 0) or 0)
             is_done = int(row["current_count"] or 0) >= int(row["target_count"] or 1)
             name_class = "done" if (side == "today" and is_done) else ""
+            mins_html = f'<span class="rp-item-mins" style="color:{color};">{mins}m</span>' if (row.get("track_time") and mins > 0) else f'<span class="rp-item-meta">{reminder}</span>'
             out.append(
                 f'<div class="rp-item">'
                 f'<div class="rp-item-name {name_class}">{name}</div>'
-                f'<div class="rp-item-meta">{reminder}</div>'
+                f'{mins_html}'
                 f'</div>'
             )
         return "".join(out)
+
+    # Summary line for today
+    today_summary = ""
+    if today_total_mins > 0 or today_remaining_mins > 0:
+        parts = []
+        if today_done_mins > 0:
+            parts.append(f'<span style="color:var(--ht-green-text);font-weight:600;">✓ {today_done_mins} min done</span>')
+        if today_remaining_mins > 0:
+            parts.append(f'<span style="color:var(--ht-accent-text);font-weight:600;">{today_remaining_mins} min left</span>')
+        today_summary = f'<div class="rp-time-summary">{" · ".join(parts)}</div>'
+
+    tomorrow_summary = ""
+    if tomorrow_total_mins > 0:
+        tomorrow_summary = f'<div class="rp-time-summary"><span style="color:var(--ht-accent-text);font-weight:600;">{tomorrow_total_mins} min planned</span></div>'
 
     st.markdown(
         f"""
@@ -2487,13 +2649,15 @@ with st.expander("Review & Preview", expanded=False):
                 <div class="rp-col-title today">
                     <span class="rp-dot today"></span>Today · {today_label}
                 </div>
-                {rp_items_html(today_done, "today")}
+                {today_summary}
+                {rp_items_html(today_done, "today", today_by_group, "#1a5c30")}
             </div>
             <div class="rp-col">
                 <div class="rp-col-title tomorrow">
                     <span class="rp-dot tomorrow"></span>Tomorrow · {tomorrow_label}
                 </div>
-                {rp_items_html(tomorrow_due, "tomorrow")}
+                {tomorrow_summary}
+                {rp_items_html(tomorrow_due, "tomorrow", tomorrow_by_group, "#9a3e15")}
             </div>
         </div>
         """,
@@ -2790,6 +2954,13 @@ with st.expander("Current Progress", expanded=False):
                                 if habit_link_key not in st.session_state:
                                     st.session_state[habit_link_key] = row.get("habit_link", "") or ""
 
+                                track_time_key = f"manage_track_time_{habit_id}"
+                                est_mins_key = f"manage_est_mins_{habit_id}"
+                                if track_time_key not in st.session_state:
+                                    st.session_state[track_time_key] = bool(row.get("track_time", False))
+                                if est_mins_key not in st.session_state:
+                                    st.session_state[est_mins_key] = int(row.get("estimated_minutes", 0) or 0)
+
                                 edit_name = st.text_input("Habit name", key=name_key)
 
                                 edit_col1, edit_col2 = st.columns(2)
@@ -2890,6 +3061,19 @@ with st.expander("Current Progress", expanded=False):
                                     placeholder="https://youtube.com/watch?v=...",
                                 )
 
+                                edit_habit_type_val = st.session_state.get(type_key, row["habit_type"])
+                                st.checkbox(
+                                    "Track time for this habit",
+                                    key=track_time_key,
+                                    help="Include in Review & Preview time totals.",
+                                )
+                                if st.session_state.get(track_time_key) and edit_habit_type_val != "duration":
+                                    st.number_input(
+                                        "Estimated duration (min)",
+                                        min_value=1, max_value=480, step=5,
+                                        key=est_mins_key,
+                                    )
+
                                 save_col1, save_col2 = st.columns(2)
                                 with save_col1:
                                     save_clicked = st.button("Save", key=f"save_manage_{habit_id}", width="stretch", type="primary")
@@ -2909,6 +3093,8 @@ with st.expander("Current Progress", expanded=False):
                                         reminder_bucket=st.session_state.get(reminder_bucket_key, "anytime"),
                                         habit_group=st.session_state.get(habit_group_key, DEFAULT_HABIT_GROUP),
                                         habit_link=st.session_state.get(habit_link_key, ""),
+                                        track_time=bool(st.session_state.get(track_time_key, False)),
+                                        estimated_minutes=int(st.session_state.get(est_mins_key, 0) or 0),
                                     )
                                     if error:
                                         st.error(error)
