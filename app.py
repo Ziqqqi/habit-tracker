@@ -320,7 +320,6 @@ def add_habit(
             ))
             conn.commit()
             conn.close()
-            st.cache_data.clear()
             return "Habit restored."
 
     cur.execute("""
@@ -351,11 +350,9 @@ def add_habit(
 
     conn.commit()
     conn.close()
-    st.cache_data.clear()
     return "Habit added."
 
 
-@st.cache_data(ttl=30)
 def get_active_habits(user_id: str = ""):
     """Return all active habits for a user."""
     conn = get_connection()
@@ -376,7 +373,6 @@ def get_active_habits(user_id: str = ""):
     return rows
 
 
-@st.cache_data(ttl=30)
 def get_existing_habit_groups(user_id: str = "", include_default: bool = True) -> list[str]:
     """Return existing active habit groups for dropdowns."""
     conn = get_connection()
@@ -413,7 +409,6 @@ def deactivate_habit(habit_id: int):
 
     conn.commit()
     conn.close()
-    st.cache_data.clear()
 
 
 def log_habit(habit_id: int, user_id: str = "", count: int = 1, log_date: date | None = None):
@@ -433,7 +428,6 @@ def log_habit(habit_id: int, user_id: str = "", count: int = 1, log_date: date |
 
     conn.commit()
     conn.close()
-    st.cache_data.clear()
 
 
 def get_habit_by_id(habit_id: int):
@@ -606,7 +600,6 @@ def update_habit(
             habit_id,
         ))
         conn.commit()
-        st.cache_data.clear()
         return None
     except psycopg2.IntegrityError:
         return "Habit name already exists."
@@ -781,7 +774,6 @@ def get_schedule_status(frequency_type: str, current_count: int, target_count: i
     return "Missed"
 
 
-@st.cache_data(ttl=30)
 def get_current_progress(user_id: str = ""):
     """Return current period progress for each active habit."""
     habits = get_active_habits(user_id=user_id)
@@ -856,7 +848,6 @@ def get_current_progress(user_id: str = ""):
     return rows
 
 
-@st.cache_data(ttl=30)
 def get_recent_logs(user_id: str = "", limit: int = 20):
     """Return recent logs in reverse chronological order for active habits only."""
     conn = get_connection()
@@ -921,7 +912,6 @@ def delete_log(log_id: int):
     cur.execute("DELETE FROM habit_logs WHERE id = %s", (log_id,))
     conn.commit()
     conn.close()
-    st.cache_data.clear()
 
 
 def get_month_date_range(target_date: date):
@@ -942,7 +932,6 @@ def daterange(start_date: date, end_date: date):
         current += timedelta(days=1)
 
 
-@st.cache_data(ttl=30)
 def get_habit_logs_summary(habit_id: int, start_date: date, end_date: date):
     conn = get_connection()
     cur = conn.cursor()
@@ -1071,7 +1060,6 @@ def get_successful_period_streak(
     return streak
 
 
-@st.cache_data(ttl=60)
 def get_monthly_stats(user_id: str = ""):
     """Return period-aware monthly stats for daily, weekly, and cycle-based habits."""
     today = date.today()
@@ -2384,155 +2372,141 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── Add a New Habit ──
-if "show_add_form" not in st.session_state:
-    st.session_state["show_add_form"] = False
+with st.expander("Add a New Habit", expanded=False):
+    st.markdown('<div class="expander-note">Start simple. You can always edit the rule later.</div>', unsafe_allow_html=True)
+    with st.form("add_habit_form", clear_on_submit=True):
+        new_habit = st.text_input(
+            "Habit name",
+            placeholder="e.g. Drink water, Running, Face mask",
+        )
 
-add_col, _ = st.columns([1, 4])
-with add_col:
-    if st.button(
-        "✕ Cancel" if st.session_state["show_add_form"] else "＋ Add Habit",
-        type="secondary" if st.session_state["show_add_form"] else "primary",
-        use_container_width=True,
-    ):
-        st.session_state["show_add_form"] = not st.session_state["show_add_form"]
-        st.rerun()
-
-if st.session_state["show_add_form"]:
-    with st.container(border=True):
-        st.markdown('<div class="expander-note">Start simple. You can always edit the rule later.</div>', unsafe_allow_html=True)
-        with st.form("add_habit_form", clear_on_submit=True):
-            new_habit = st.text_input(
-                "Habit name",
-                placeholder="e.g. Drink water, Running, Face mask",
+        col1, col2 = st.columns(2)
+        with col1:
+            habit_type = st.selectbox(
+                "Habit type",
+                options=["count", "completion", "duration"],
+                format_func=lambda x: {"count": "Count", "completion": "Completion", "duration": "Duration (min)"}[x],
+            )
+        with col2:
+            frequency_type = st.selectbox(
+                "Frequency",
+                options=["daily", "x_per_week", "every_n_days", "weekly"],
+                format_func=lambda x: {
+                    "daily": "Daily",
+                    "x_per_week": "X times / week",
+                    "every_n_days": "Every N days",
+                    "weekly": "Weekly"
+                }[x],
             )
 
-            col1, col2 = st.columns(2)
-            with col1:
-                habit_type = st.selectbox(
-                    "Habit type",
-                    options=["count", "completion", "duration"],
-                    format_func=lambda x: {"count": "Count", "completion": "Completion", "duration": "Duration (min)"}[x],
+        freq_col1, freq_col2 = st.columns(2)
+        with freq_col1:
+            frequency_value = st.number_input(
+                "Frequency value (N)",
+                min_value=1,
+                value=1,
+                step=1,
+                help="For 'X times/week' or 'Every N days'. Ignored for Daily/Weekly.",
+            )
+        with freq_col2:
+            target_label = "Target (min)" if habit_type == "duration" else "Target count per period"
+            target_step = 15 if habit_type == "duration" else 1
+            target_default = 60 if habit_type == "duration" else 1
+            target_count = st.number_input(
+                target_label,
+                min_value=1,
+                value=target_default,
+                step=target_step,
+            )
+
+        reminder_bucket = st.selectbox(
+            "Time of day",
+            options=[key for key, _ in REMINDER_BUCKET_OPTIONS],
+            format_func=lambda x: REMINDER_BUCKET_LABEL_MAP[x],
+            index=0,
+        )
+
+        existing_groups = get_existing_habit_groups(user_id=current_user_id)
+        create_new_group_label = "+ Create new group"
+        group_choice = st.selectbox(
+            "Group",
+            options=existing_groups + [create_new_group_label],
+            index=0,
+            help="Choose an existing group, or select '+ Create new group'.",
+        )
+        habit_group_custom = st.text_input(
+            "New group name",
+            placeholder="e.g. Lifestyle, Fitness, Learning",
+            help="Only used if '+ Create new group' is selected above.",
+        )
+
+        schedule_mode = "none"
+        use_weekdays = st.checkbox(
+            "Use scheduled weekdays",
+            value=False,
+            help="For weekly/x-per-week habits — show due/upcoming states on specific days.",
+        )
+        selected_days = st.multiselect(
+            "Scheduled weekdays",
+            options=[idx for idx, _ in WEEKDAY_OPTIONS],
+            default=[],
+            format_func=lambda x: WEEKDAY_LABEL_MAP[x],
+        )
+
+        track_time = st.checkbox(
+            "Track time for this habit",
+            value=False,
+            help="Include this habit's estimated duration in Review & Preview time totals.",
+        )
+        estimated_minutes = 0
+        if track_time and habit_type != "duration":
+            estimated_minutes = st.number_input(
+                "Estimated duration (min)",
+                min_value=1, max_value=480, value=30, step=5,
+                help="How many minutes does this habit take?",
+            )
+
+        submitted = st.form_submit_button("Add habit", use_container_width=True, type="primary")
+
+        if submitted:
+            # Resolve group
+            if group_choice == create_new_group_label:
+                habit_group = habit_group_custom.strip() or DEFAULT_HABIT_GROUP
+            else:
+                habit_group = group_choice
+
+            # Resolve schedule
+            if use_weekdays and frequency_type in {"x_per_week", "weekly"}:
+                schedule_mode = "weekdays"
+            else:
+                schedule_mode = "none"
+                selected_days = []
+
+            if new_habit.strip():
+                result = add_habit(
+                    name=new_habit,
+                    user_id=current_user_id,
+                    habit_type=habit_type,
+                    frequency_type=frequency_type,
+                    frequency_value=int(frequency_value),
+                    target_count=int(target_count),
+                    schedule_mode=schedule_mode,
+                    scheduled_days=selected_days,
+                    reminder_bucket=reminder_bucket,
+                    habit_group=habit_group,
+                    track_time=bool(track_time),
+                    estimated_minutes=int(estimated_minutes),
                 )
-            with col2:
-                frequency_type = st.selectbox(
-                    "Frequency",
-                    options=["daily", "x_per_week", "every_n_days", "weekly"],
-                    format_func=lambda x: {
-                        "daily": "Daily",
-                        "x_per_week": "X times / week",
-                        "every_n_days": "Every N days",
-                        "weekly": "Weekly"
-                    }[x],
-                )
-
-            freq_col1, freq_col2 = st.columns(2)
-            with freq_col1:
-                frequency_value = st.number_input(
-                    "Frequency value (N)",
-                    min_value=1,
-                    value=1,
-                    step=1,
-                    help="For 'X times/week' or 'Every N days'. Ignored for Daily/Weekly.",
-                )
-            with freq_col2:
-                target_label = "Target (min)" if habit_type == "duration" else "Target count per period"
-                target_step = 15 if habit_type == "duration" else 1
-                target_default = 60 if habit_type == "duration" else 1
-                target_count = st.number_input(
-                    target_label,
-                    min_value=1,
-                    value=target_default,
-                    step=target_step,
-                )
-
-            reminder_bucket = st.selectbox(
-                "Time of day",
-                options=[key for key, _ in REMINDER_BUCKET_OPTIONS],
-                format_func=lambda x: REMINDER_BUCKET_LABEL_MAP[x],
-                index=0,
-            )
-
-            existing_groups = get_existing_habit_groups(user_id=current_user_id)
-            create_new_group_label = "+ Create new group"
-            group_choice = st.selectbox(
-                "Group",
-                options=existing_groups + [create_new_group_label],
-                index=0,
-                help="Choose an existing group, or select '+ Create new group'.",
-            )
-            habit_group_custom = st.text_input(
-                "New group name",
-                placeholder="e.g. Lifestyle, Fitness, Learning",
-                help="Only used if '+ Create new group' is selected above.",
-            )
-
-            schedule_mode = "none"
-            use_weekdays = st.checkbox(
-                "Use scheduled weekdays",
-                value=False,
-                help="For weekly/x-per-week habits — show due/upcoming states on specific days.",
-            )
-            selected_days = st.multiselect(
-                "Scheduled weekdays",
-                options=[idx for idx, _ in WEEKDAY_OPTIONS],
-                default=[],
-                format_func=lambda x: WEEKDAY_LABEL_MAP[x],
-            )
-
-            track_time = st.checkbox(
-                "Track time for this habit",
-                value=False,
-                help="Include this habit's estimated duration in Review & Preview time totals.",
-            )
-            estimated_minutes = 0
-            if track_time and habit_type != "duration":
-                estimated_minutes = st.number_input(
-                    "Estimated duration (min)",
-                    min_value=1, max_value=480, value=30, step=5,
-                )
-
-            submitted = st.form_submit_button("Add habit", use_container_width=True, type="primary")
-
-            if submitted:
-                if group_choice == create_new_group_label:
-                    habit_group = habit_group_custom.strip() or DEFAULT_HABIT_GROUP
+                if result == "Habit added.":
+                    st.success(f"Added: {new_habit.strip()}")
+                    st.rerun()
+                elif result == "Habit restored.":
+                    st.success(f"Restored: {new_habit.strip()}")
+                    st.rerun()
                 else:
-                    habit_group = group_choice
-
-                if use_weekdays and frequency_type in {"x_per_week", "weekly"}:
-                    schedule_mode = "weekdays"
-                else:
-                    schedule_mode = "none"
-                    selected_days = []
-
-                if new_habit.strip():
-                    result = add_habit(
-                        name=new_habit,
-                        user_id=current_user_id,
-                        habit_type=habit_type,
-                        frequency_type=frequency_type,
-                        frequency_value=int(frequency_value),
-                        target_count=int(target_count),
-                        schedule_mode=schedule_mode,
-                        scheduled_days=selected_days,
-                        reminder_bucket=reminder_bucket,
-                        habit_group=habit_group,
-                        track_time=bool(track_time),
-                        estimated_minutes=int(estimated_minutes),
-                    )
-                    if result == "Habit added.":
-                        st.success(f"Added: {new_habit.strip()}")
-                        st.session_state["show_add_form"] = False
-                        st.rerun()
-                    elif result == "Habit restored.":
-                        st.success(f"Restored: {new_habit.strip()}")
-                        st.session_state["show_add_form"] = False
-                        st.rerun()
-                    else:
-                        st.warning(result)
-                else:
-                    st.warning("Please enter a habit name.")
+                    st.warning(result)
+            else:
+                st.warning("Please enter a habit name.")
 
 # st.divider()
 
