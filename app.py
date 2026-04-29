@@ -2632,9 +2632,16 @@ with st.expander("Review & Preview", expanded=False):
                 reminder = row["reminder_label"]
                 mins = int(row.get("estimated_minutes", 0) or 0)
                 is_done = int(row["current_count"] or 0) >= int(row["target_count"] or 1)
+                habit_type = row.get("habit_type", "count")
                 name_class = "done" if (side == "today" and is_done) else ""
                 if row.get("track_time") and mins > 0:
+                    # Show estimated time for all track_time habits
                     right_html = f'<span class="rp-item-mins" style="color:{color};">{mins} min</span>'
+                elif habit_type == "completion" or (habit_type == "duration"):
+                    # Completion: show ✓ or ○
+                    symbol = "✓" if is_done else "○"
+                    sym_color = "var(--ht-green-text)" if is_done else "var(--ht-ink-4)"
+                    right_html = f'<span class="rp-item-meta" style="color:{sym_color};font-weight:700;">{symbol}</span>'
                 else:
                     target = int(row.get("target_count") or 1)
                     current = int(row.get("current_count") or 0)
