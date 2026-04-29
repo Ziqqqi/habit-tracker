@@ -2283,47 +2283,43 @@ hr {
     font-style: italic;
 }
 
-.rp-time-summary {
-    font-size: 0.75rem;
-    margin-bottom: 0.4rem;
+.rp-grand-total {
+    font-size: 0.78rem;
+    margin-bottom: 0.55rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: var(--ht-radius-sm);
+    background: var(--ht-bg-2);
+    border: 1px solid var(--ht-line);
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
 }
 
-.rp-time-badge {
-    display: inline-block;
-    padding: 0.12rem 0.45rem;
-    border-radius: 999px;
-    font-size: 0.7rem;
-    font-weight: 600;
-}
-
-.rp-group-breakdown {
-    margin-bottom: 0.4rem;
-    padding-bottom: 0.35rem;
-    border-bottom: 1px solid var(--ht-line-2);
-}
-
-.rp-group-row {
+.rp-group-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 0.12rem 0;
+    justify-content: space-between;
+    margin: 0.55rem 0 0.15rem 0;
+    padding: 0.1rem 0;
+    border-bottom: 1px solid var(--ht-line);
 }
 
-.rp-group-name {
+.rp-group-label {
+    font-size: 0.67rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ht-ink-3);
+}
+
+.rp-group-subtotal {
     font-size: 0.72rem;
     font-weight: 600;
-    color: var(--ht-ink-3);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-family: var(--ht-mono);
 }
 
-.rp-group-mins {
-    font-size: 0.72rem;
-    font-weight: 700;
-    font-family: var(--ht-mono);
+.rp-item-indented {
+    padding-left: 0.4rem;
 }
 
 .rp-item-mins {
@@ -2590,57 +2586,67 @@ with st.expander("Review & Preview", expanded=False):
         and r.get("frequency_type") == "daily"
     )
 
-    def time_badge(mins: int, color: str) -> str:
-        if mins <= 0:
-            return ""
-        return f'<span class="rp-time-badge" style="color:{color};background:{color}18;border:1px solid {color}30;">{mins} min</span>'
-
-    def group_breakdown_html(by_group: dict, color: str) -> str:
-        if not by_group:
-            return ""
-        items = "".join(
-            f'<div class="rp-group-row"><span class="rp-group-name">{g}</span><span class="rp-group-mins" style="color:{color};">{m} min</span></div>'
-            for g, m in sorted(by_group.items())
-        )
-        return f'<div class="rp-group-breakdown">{items}</div>'
-
-    def rp_items_html(rows, side, by_group, color):
+    def rp_col_html(rows, side, total_mins, by_group, done_mins, remaining_mins, color, accent):
         out = []
-        # Group breakdown first if there's time data
-        if by_group:
-            out.append(group_breakdown_html(by_group, color))
+
+        # 1. Grand total line
+        if side == "today":
+            if done_mins > 0 or remaining_mins > 0:
+                parts = []
+                if done_mins > 0:
+                    parts.append(f'<span style="color:var(--ht-green-text);font-weight:700;">✓ {done_mins} min done</span>')
+                if remaining_mins > 0:
+                    parts.append(f'<span style="color:{accent};font-weight:700;">{remaining_mins} min left</span>')
+                out.append(f'<div class="rp-grand-total">{" · ".join(parts)}</div>')
+        else:
+            if total_mins > 0:
+                out.append(f'<div class="rp-grand-total"><span style="color:{accent};font-weight:700;">{total_mins} min planned</span></div>')
+
         if not rows:
             label = "All clear — nothing yet" if side == "today" else "Nothing scheduled"
             out.append(f'<div class="rp-empty">{label}</div>')
             return "".join(out)
+
+        # 2. Group by habit_group preserving sort order
+        from collections import OrderedDict
+        groups_ordered: dict = OrderedDict()
         for row in rows:
-            name = row["habit_name"]
-            reminder = row["reminder_label"]
-            mins = int(row.get("estimated_minutes", 0) or 0)
-            is_done = int(row["current_count"] or 0) >= int(row["target_count"] or 1)
-            name_class = "done" if (side == "today" and is_done) else ""
-            mins_html = f'<span class="rp-item-mins" style="color:{color};">{mins}m</span>' if (row.get("track_time") and mins > 0) else f'<span class="rp-item-meta">{reminder}</span>'
+            g = row.get("habit_group") or DEFAULT_HABIT_GROUP
+            groups_ordered.setdefault(g, []).append(row)
+
+        for group_name, group_rows in groups_ordered.items():
+            group_mins = by_group.get(group_name, 0)
+
+            # Group header with subtotal
+            subtotal_html = f'<span class="rp-group-subtotal" style="color:{accent};">{group_mins} min</span>' if group_mins > 0 else ""
             out.append(
-                f'<div class="rp-item">'
-                f'<div class="rp-item-name {name_class}">{name}</div>'
-                f'{mins_html}'
+                f'<div class="rp-group-header">'
+                f'<span class="rp-group-label">{group_name}</span>'
+                f'{subtotal_html}'
                 f'</div>'
             )
+
+            # Habits under this group
+            for row in group_rows:
+                name = row["habit_name"]
+                reminder = row["reminder_label"]
+                mins = int(row.get("estimated_minutes", 0) or 0)
+                is_done = int(row["current_count"] or 0) >= int(row["target_count"] or 1)
+                name_class = "done" if (side == "today" and is_done) else ""
+                if row.get("track_time") and mins > 0:
+                    right_html = f'<span class="rp-item-mins" style="color:{color};">{mins} min</span>'
+                else:
+                    target = int(row.get("target_count") or 1)
+                    current = int(row.get("current_count") or 0)
+                    right_html = f'<span class="rp-item-meta">{current}/{target}</span>'
+                out.append(
+                    f'<div class="rp-item rp-item-indented">'
+                    f'<div class="rp-item-name {name_class}">{name}</div>'
+                    f'{right_html}'
+                    f'</div>'
+                )
+
         return "".join(out)
-
-    # Summary line for today
-    today_summary = ""
-    if today_total_mins > 0 or today_remaining_mins > 0:
-        parts = []
-        if today_done_mins > 0:
-            parts.append(f'<span style="color:var(--ht-green-text);font-weight:600;">✓ {today_done_mins} min done</span>')
-        if today_remaining_mins > 0:
-            parts.append(f'<span style="color:var(--ht-accent-text);font-weight:600;">{today_remaining_mins} min left</span>')
-        today_summary = f'<div class="rp-time-summary">{" · ".join(parts)}</div>'
-
-    tomorrow_summary = ""
-    if tomorrow_total_mins > 0:
-        tomorrow_summary = f'<div class="rp-time-summary"><span style="color:var(--ht-accent-text);font-weight:600;">{tomorrow_total_mins} min planned</span></div>'
 
     st.markdown(
         f"""
@@ -2649,15 +2655,13 @@ with st.expander("Review & Preview", expanded=False):
                 <div class="rp-col-title today">
                     <span class="rp-dot today"></span>Today · {today_label}
                 </div>
-                {today_summary}
-                {rp_items_html(today_done, "today", today_by_group, "#1a5c30")}
+                {rp_col_html(today_done, "today", today_total_mins, today_by_group, today_done_mins, today_remaining_mins, "#1a5c30", "#1a5c30")}
             </div>
             <div class="rp-col">
                 <div class="rp-col-title tomorrow">
                     <span class="rp-dot tomorrow"></span>Tomorrow · {tomorrow_label}
                 </div>
-                {tomorrow_summary}
-                {rp_items_html(tomorrow_due, "tomorrow", tomorrow_by_group, "#9a3e15")}
+                {rp_col_html(tomorrow_due, "tomorrow", tomorrow_total_mins, tomorrow_by_group, 0, 0, "#9a3e15", "#9a3e15")}
             </div>
         </div>
         """,
