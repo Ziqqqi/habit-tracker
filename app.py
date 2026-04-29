@@ -1,12 +1,12 @@
-# v4.7.2 habit group dropdown
+# v4.8.0 PostgreSQL migration
 
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from datetime import datetime, date, timedelta
 from calendar import monthrange
 import streamlit as st
 import pandas as pd
 
-DB_NAME = "habit_tracker.db"
 WEEKDAY_OPTIONS = [(0, "Mon"), (1, "Tue"), (2, "Wed"), (3, "Thu"), (4, "Fri"), (5, "Sat"), (6, "Sun")]
 WEEKDAY_LABEL_MAP = {idx: label for idx, label in WEEKDAY_OPTIONS}
 
@@ -75,162 +75,84 @@ def format_target_date_short(target_date: date) -> str:
 # Database helpers
 # -----------------------------
 def get_connection():
-    """Create a SQLite connection."""
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    """Create a PostgreSQL connection using Streamlit secrets."""
+    url = st.secrets["DATABASE_URL"]
+    conn = psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
 
 
 def column_exists(cur, table_name: str, column_name: str) -> bool:
-    cur.execute(f"PRAGMA table_info({table_name})")
-    columns = [row[1] for row in cur.fetchall()]
-    return column_name in columns
+    cur.execute("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = %s AND column_name = %s
+    """, (table_name, column_name))
+    return cur.fetchone() is not None
 
 
 def init_db():
-    """Create tables if they do not exist and apply lightweight v2 migrations."""
+    """Create tables and apply migrations for PostgreSQL."""
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS habits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL,
-            is_active INTEGER NOT NULL DEFAULT 1
+            is_active INTEGER NOT NULL DEFAULT 1,
+            daily_target INTEGER DEFAULT 1,
+            habit_type TEXT DEFAULT 'count',
+            frequency_type TEXT DEFAULT 'daily',
+            frequency_value INTEGER DEFAULT 1,
+            target_count INTEGER DEFAULT 1,
+            schedule_mode TEXT DEFAULT 'none',
+            scheduled_days TEXT DEFAULT '',
+            reminder_bucket TEXT DEFAULT 'anytime',
+            habit_group TEXT DEFAULT 'General',
+            habit_link TEXT DEFAULT '',
+            track_time INTEGER DEFAULT 0,
+            estimated_minutes INTEGER DEFAULT 0
         )
     """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS habit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            habit_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            habit_id INTEGER NOT NULL REFERENCES habits(id),
             logged_at TEXT NOT NULL,
             log_date TEXT NOT NULL,
-            count INTEGER NOT NULL DEFAULT 1,
-            FOREIGN KEY (habit_id) REFERENCES habits (id)
+            count INTEGER NOT NULL DEFAULT 1
         )
     """)
 
-    # v1 compatibility
-    if not column_exists(cur, "habits", "daily_target"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN daily_target INTEGER DEFAULT 1
-        """)
+    # Migrations — add any missing columns
+    for col, defn in [
+        ("daily_target", "INTEGER DEFAULT 1"),
+        ("habit_type", "TEXT DEFAULT 'count'"),
+        ("frequency_type", "TEXT DEFAULT 'daily'"),
+        ("frequency_value", "INTEGER DEFAULT 1"),
+        ("target_count", "INTEGER DEFAULT 1"),
+        ("schedule_mode", "TEXT DEFAULT 'none'"),
+        ("scheduled_days", "TEXT DEFAULT ''"),
+        ("reminder_bucket", "TEXT DEFAULT 'anytime'"),
+        ("habit_group", "TEXT DEFAULT 'General'"),
+        ("habit_link", "TEXT DEFAULT ''"),
+        ("track_time", "INTEGER DEFAULT 0"),
+        ("estimated_minutes", "INTEGER DEFAULT 0"),
+    ]:
+        if not column_exists(cur, "habits", col):
+            cur.execute(f"ALTER TABLE habits ADD COLUMN {col} {defn}")
 
-    # v2 fields
-    if not column_exists(cur, "habits", "habit_type"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN habit_type TEXT DEFAULT 'count'
-        """)
-
-    if not column_exists(cur, "habits", "frequency_type"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN frequency_type TEXT DEFAULT 'daily'
-        """)
-
-    if not column_exists(cur, "habits", "frequency_value"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN frequency_value INTEGER DEFAULT 1
-        """)
-
-    if not column_exists(cur, "habits", "target_count"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN target_count INTEGER DEFAULT 1
-        """)
-
-    if not column_exists(cur, "habits", "schedule_mode"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN schedule_mode TEXT DEFAULT 'none'
-        """)
-
-    if not column_exists(cur, "habits", "scheduled_days"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN scheduled_days TEXT DEFAULT ''
-        """)
-
-    if not column_exists(cur, "habits", "reminder_bucket"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN reminder_bucket TEXT DEFAULT 'anytime'
-        """)
-
-    if not column_exists(cur, "habits", "habit_group"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN habit_group TEXT DEFAULT 'General'
-        """)
-
-    if not column_exists(cur, "habits", "habit_link"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN habit_link TEXT DEFAULT ''
-        """)
-
-    if not column_exists(cur, "habits", "track_time"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN track_time INTEGER DEFAULT 0
-        """)
-
-    if not column_exists(cur, "habits", "estimated_minutes"):
-        cur.execute("""
-            ALTER TABLE habits
-            ADD COLUMN estimated_minutes INTEGER DEFAULT 0
-        """)
-
-    # Backfill: duration habits always track time, use target_count as estimated_minutes
+    # Backfill duration habits
     cur.execute("""
         UPDATE habits
-        SET track_time = 1,
-            estimated_minutes = target_count
+        SET track_time = 1, estimated_minutes = target_count
         WHERE habit_type = 'duration' AND track_time = 0
-    """)
-    cur.execute("""
-        UPDATE habits
-        SET habit_type = COALESCE(habit_type, 'count')
-    """)
-    cur.execute("""
-        UPDATE habits
-        SET frequency_type = COALESCE(frequency_type, 'daily')
-    """)
-    cur.execute("""
-        UPDATE habits
-        SET frequency_value = COALESCE(frequency_value, 1)
-    """)
-    cur.execute("""
-        UPDATE habits
-        SET target_count = CASE
-            WHEN target_count IS NULL OR target_count < 1 THEN COALESCE(daily_target, 1)
-            ELSE target_count
-        END
-    """)
-    cur.execute("""
-        UPDATE habits
-        SET schedule_mode = COALESCE(schedule_mode, 'none')
-    """)
-    cur.execute("""
-        UPDATE habits
-        SET scheduled_days = COALESCE(scheduled_days, '')
-    """)
-    cur.execute("""
-        UPDATE habits
-        SET reminder_bucket = COALESCE(NULLIF(reminder_bucket, ''), 'anytime')
-    """)
-    cur.execute("""
-        UPDATE habits
-        SET habit_group = COALESCE(NULLIF(habit_group, ''), 'General')
     """)
 
     conn.commit()
     conn.close()
+
 
 
 def normalize_habit_inputs(
@@ -346,7 +268,7 @@ def add_habit(
     cur.execute("""
         SELECT id, is_active
         FROM habits
-        WHERE name = ?
+        WHERE name = %s
     """, (clean_name,))
     existing = cur.fetchone()
 
@@ -358,19 +280,19 @@ def add_habit(
             cur.execute("""
                 UPDATE habits
                 SET is_active = 1,
-                    habit_type = ?,
-                    frequency_type = ?,
-                    frequency_value = ?,
-                    target_count = ?,
-                    daily_target = ?,
-                    schedule_mode = ?,
-                    scheduled_days = ?,
-                    reminder_bucket = ?,
-                    habit_group = ?,
-                    habit_link = ?,
-                    track_time = ?,
-                    estimated_minutes = ?
-                WHERE id = ?
+                    habit_type = %s,
+                    frequency_type = %s,
+                    frequency_value = %s,
+                    target_count = %s,
+                    daily_target = %s,
+                    schedule_mode = %s,
+                    scheduled_days = %s,
+                    reminder_bucket = %s,
+                    habit_group = %s,
+                    habit_link = %s,
+                    track_time = %s,
+                    estimated_minutes = %s
+                WHERE id = %s
             """, (
                 normalized["habit_type"],
                 normalized["frequency_type"],
@@ -397,7 +319,7 @@ def add_habit(
             schedule_mode, scheduled_days, reminder_bucket, habit_group, habit_link,
             track_time, estimated_minutes
         )
-        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         clean_name,
         datetime.now().isoformat(),
@@ -445,10 +367,10 @@ def get_existing_habit_groups(include_default: bool = True) -> list[str]:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT DISTINCT COALESCE(NULLIF(TRIM(habit_group), ''), ?) AS habit_group
+        SELECT DISTINCT COALESCE(NULLIF(TRIM(habit_group), ''), %s) AS habit_group
         FROM habits
         WHERE is_active = 1
-        ORDER BY habit_group COLLATE NOCASE
+        ORDER BY habit_group
     """, (DEFAULT_HABIT_GROUP,))
     groups = [normalize_habit_group(row["habit_group"]) for row in cur.fetchall()]
     conn.close()
@@ -471,7 +393,7 @@ def deactivate_habit(habit_id: int):
     cur.execute("""
         UPDATE habits
         SET is_active = 0
-        WHERE id = ?
+        WHERE id = %s
     """, (habit_id,))
 
     conn.commit()
@@ -488,7 +410,7 @@ def log_habit(habit_id: int, count: int = 1, log_date: date | None = None):
     cur.execute(
         """
         INSERT INTO habit_logs (habit_id, logged_at, log_date, count)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
         """,
         (habit_id, now.isoformat(timespec="seconds"), event_date.isoformat(), count)
     )
@@ -500,7 +422,7 @@ def log_habit(habit_id: int, count: int = 1, log_date: date | None = None):
 def get_habit_by_id(habit_id: int):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM habits WHERE id = ?", (habit_id,))
+    cur.execute("SELECT * FROM habits WHERE id = %s", (habit_id,))
     row = cur.fetchone()
     conn.close()
     return row
@@ -517,8 +439,8 @@ def get_current_period_total_for_habit(habit) -> int:
         """
         SELECT COALESCE(SUM(count), 0) AS total_count
         FROM habit_logs
-        WHERE habit_id = ?
-          AND log_date BETWEEN ? AND ?
+        WHERE habit_id = %s
+          AND log_date BETWEEN %s AND %s
         """,
         (habit["id"], period["start_date"].isoformat(), query_end.isoformat()),
     )
@@ -538,8 +460,8 @@ def get_latest_log_id_in_current_period(habit) -> int | None:
         """
         SELECT id
         FROM habit_logs
-        WHERE habit_id = ?
-          AND log_date BETWEEN ? AND ?
+        WHERE habit_id = %s
+          AND log_date BETWEEN %s AND %s
         ORDER BY logged_at DESC, id DESC
         LIMIT 1
         """,
@@ -580,8 +502,8 @@ def log_completion_once_for_date(habit_id: int, target_date: date):
         """
         SELECT COALESCE(SUM(count), 0) AS total_count
         FROM habit_logs
-        WHERE habit_id = ?
-          AND log_date BETWEEN ? AND ?
+        WHERE habit_id = %s
+          AND log_date BETWEEN %s AND %s
         """,
         (habit_id, period["start_date"].isoformat(), query_end.isoformat()),
     )
@@ -651,11 +573,11 @@ def update_habit(
     try:
         cur.execute("""
             UPDATE habits
-            SET name = ?, habit_type = ?, frequency_type = ?, frequency_value = ?,
-                target_count = ?, daily_target = ?, schedule_mode = ?, scheduled_days = ?,
-                reminder_bucket = ?, habit_group = ?, habit_link = ?,
-                track_time = ?, estimated_minutes = ?
-            WHERE id = ?
+            SET name = %s, habit_type = %s, frequency_type = %s, frequency_value = %s,
+                target_count = %s, daily_target = %s, schedule_mode = %s, scheduled_days = %s,
+                reminder_bucket = %s, habit_group = %s, habit_link = %s,
+                track_time = %s, estimated_minutes = %s
+            WHERE id = %s
         """, (
             clean_name,
             normalized["habit_type"], normalized["frequency_type"],
@@ -668,7 +590,7 @@ def update_habit(
         ))
         conn.commit()
         return None
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
         return "Habit name already exists."
     finally:
         conn.close()
@@ -870,8 +792,8 @@ def get_current_progress():
             SELECT
                 COALESCE(SUM(count), 0) AS total_count
             FROM habit_logs
-            WHERE habit_id = ?
-              AND log_date BETWEEN ? AND ?
+            WHERE habit_id = %s
+              AND log_date BETWEEN %s AND %s
         """, (
             habit["id"],
             period["start_date"].isoformat(),
@@ -882,7 +804,7 @@ def get_current_progress():
         cur.execute("""
             SELECT MAX(logged_at) AS last_logged_at
             FROM habit_logs
-            WHERE habit_id = ?
+            WHERE habit_id = %s
         """, (habit["id"],))
         latest_log_row = cur.fetchone()
 
@@ -935,7 +857,7 @@ def get_recent_logs(limit: int = 20):
         JOIN habits h ON l.habit_id = h.id
         WHERE h.is_active = 1
         ORDER BY l.logged_at DESC, l.id DESC
-        LIMIT ?
+        LIMIT %s
     """, (limit,))
 
     rows = cur.fetchall()
@@ -976,7 +898,7 @@ def delete_log(log_id: int):
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("DELETE FROM habit_logs WHERE id = ?", (log_id,))
+    cur.execute("DELETE FROM habit_logs WHERE id = %s", (log_id,))
     conn.commit()
     conn.close()
 
@@ -1005,8 +927,8 @@ def get_habit_logs_summary(habit_id: int, start_date: date, end_date: date):
     cur.execute("""
         SELECT log_date, SUM(count) AS total
         FROM habit_logs
-        WHERE habit_id = ?
-          AND log_date BETWEEN ? AND ?
+        WHERE habit_id = %s
+          AND log_date BETWEEN %s AND %s
         GROUP BY log_date
     """, (habit_id, start_date.isoformat(), end_date.isoformat()))
     rows = cur.fetchall()
