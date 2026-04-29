@@ -2350,8 +2350,28 @@ hr {
 
 init_db()
 
-# Use a fixed single-user ID for now
-current_user_id = "default_user"
+# ── Login wall ──
+if not st.user.is_logged_in:
+    st.markdown("""
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:1.5rem;">
+        <svg width="56" height="56" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="16" cy="16" r="15" fill="#fef3eb" stroke="#e8a87c" stroke-width="1.5"/>
+            <path d="M9 16.5l5 5 9-9" stroke="#c2622d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+        <div style="text-align:center;">
+            <h1 style="font-size:1.8rem;font-weight:600;letter-spacing:-0.03em;color:#1c1612;margin-bottom:0.3rem;">Habit Tracker</h1>
+            <p style="color:#7a6355;font-size:0.9rem;margin:0;">Sign in to track your habits</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("Sign in with Google", use_container_width=True, type="primary"):
+            st.login()
+    st.stop()
+
+# User is logged in — get their ID
+current_user_id = st.user.email or st.user.sub or ""
 
 # Custom SVG favicon — terracotta checkmark circle
 st.markdown("""
@@ -2370,6 +2390,13 @@ st.markdown("""
     <p style="margin: 0 !important; font-size: 0.82rem !important; color: #b0988a !important; padding-left: 2.6rem;">Track your habits with period-aware progress and smart scheduling.</p>
 </div>
 """, unsafe_allow_html=True)
+
+_user_col, _logout_col = st.columns([4, 1])
+with _user_col:
+    st.markdown(f'<div style="font-size:0.78rem;color:var(--ht-ink-3);padding:0.2rem 0;">👤 {st.user.name or st.user.email}</div>', unsafe_allow_html=True)
+with _logout_col:
+    if st.button("Sign out", type="secondary"):
+        st.logout()
 
 
 with st.expander("Add a New Habit", expanded=False):
