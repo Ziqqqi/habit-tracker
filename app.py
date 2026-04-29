@@ -227,7 +227,7 @@ def normalize_habit_inputs(
     habit_link: str = "",
 ):
     """Basic validation and normalization for v4 habit settings."""
-    valid_habit_types = {"count", "completion"}
+    valid_habit_types = {"count", "completion", "duration"}
     valid_frequency_types = {"daily", "x_per_week", "every_n_days", "weekly"}
 
     if habit_type not in valid_habit_types:
@@ -707,10 +707,26 @@ def get_current_period_info(frequency_type: str, frequency_value: int, anchor_da
     return get_period_info_for_date(frequency_type, frequency_value, date.today(), anchor_date)
 
 
+def format_minutes(minutes: int) -> str:
+    """Convert minutes to human-friendly string, e.g. 90 -> '90 min'."""
+    return f"{minutes} min"
+
+
 def format_rule_text(habit_type: str, frequency_type: str, frequency_value: int, target_count: int) -> str:
     """Human-friendly rule text."""
-    time_unit = "time" if target_count == 1 else "times"
     day_unit = "day" if frequency_value == 1 else "days"
+
+    if habit_type == "duration":
+        dur = format_minutes(target_count)
+        if frequency_type == "x_per_week":
+            return f"{dur} / week"
+        if frequency_type == "weekly":
+            return f"{dur} / week"
+        if frequency_type == "every_n_days":
+            return f"{dur} every {frequency_value} {day_unit}"
+        return f"{dur} / day"
+
+    time_unit = "time" if target_count == 1 else "times"
 
     if frequency_type == "x_per_week":
         return f"{target_count} {time_unit} / week"
@@ -2328,8 +2344,8 @@ with st.expander("Add a New Habit", expanded=False):
         with col1:
             habit_type = st.selectbox(
                 "Habit type",
-                options=["count", "completion"],
-                format_func=lambda x: "Count" if x == "count" else "Completion",
+                options=["count", "completion", "duration"],
+                format_func=lambda x: {"count": "Count", "completion": "Completion", "duration": "Duration (min)"}[x],
             )
         with col2:
             frequency_type = st.selectbox(
@@ -2353,11 +2369,14 @@ with st.expander("Add a New Habit", expanded=False):
                 help="For 'X times/week' or 'Every N days'. Ignored for Daily/Weekly.",
             )
         with freq_col2:
+            target_label = "Target (min)" if habit_type == "duration" else "Target count per period"
+            target_step = 15 if habit_type == "duration" else 1
+            target_default = 60 if habit_type == "duration" else 1
             target_count = st.number_input(
-                "Target count per period",
+                target_label,
                 min_value=1,
-                value=1,
-                step=1,
+                value=target_default,
+                step=target_step,
             )
 
         reminder_bucket = st.selectbox(
@@ -2557,14 +2576,23 @@ with st.expander("Current Progress", expanded=False):
                         is_count_habit = row["habit_type"] == "count"
                         is_single_completion = row["habit_type"] == "completion" and target == 1
                         is_multi_completion = row["habit_type"] == "completion" and target > 1
+                        is_duration = row["habit_type"] == "duration"
                         done_this_period = current_count >= target
+
+                        # Display format for count vs duration
+                        if is_duration:
+                            count_display = f"{current_count}"
+                            target_display = f"/{target} min"
+                        else:
+                            count_display = f"{current_count}"
+                            target_display = f"/{target}"
 
                         # Status colors
                         if done_this_period:
                             bar_color = "var(--ht-green)"
                             badge_class = "complete" if not is_single_completion else "done"
                         elif current_count > 0:
-                            bar_color = "var(--ht-blue)"
+                            bar_color = "var(--ht-accent)"
                             badge_class = "on-track"
                         else:
                             bar_color = "var(--ht-bg-3)"
@@ -2587,7 +2615,7 @@ with st.expander("Current Progress", expanded=False):
                                 </div>
                             </div>
                             <div class="slim-right">
-                                <div class="slim-count {'slim-count-done' if done_this_period else ''}">{current_count}<span class="slim-target">/{target}</span></div>
+                                <div class="slim-count {'slim-count-done' if done_this_period else ''}">{count_display}<span class="slim-target">{target_display}</span></div>
                                 <div class="slim-last">{last_text}</div>
                             </div>
                         </div>
@@ -2603,10 +2631,17 @@ with st.expander("Current Progress", expanded=False):
                             link_col = None
 
                         with btn_col:
-                            if is_single_completion:
+                            if is_duration:
                                 if done_this_period:
-                                    if st.button("✓ Done", key=f"log_{habit_id}", width="stretch", disabled=True):
-                                        pass
+                                    st.button("✓ Done", key=f"log_{habit_id}", width="stretch", disabled=True)
+                                else:
+                                    # Quick +15 button as primary
+                                    if st.button("+ 15 min", key=f"log_{habit_id}", width="stretch", type="primary"):
+                                        log_habit(habit_id, count=15)
+                                        st.rerun()
+                            elif is_single_completion:
+                                if done_this_period:
+                                    st.button("✓ Done", key=f"log_{habit_id}", width="stretch", disabled=True)
                                 else:
                                     if st.button("Mark done", key=f"log_{habit_id}", width="stretch", type="primary"):
                                         err = log_completion_once_for_current_period(habit_id)
@@ -2631,55 +2666,93 @@ with st.expander("Current Progress", expanded=False):
 
                         # Secondary actions + Manage inside expander
                         with st.expander("More", expanded=False):
-                            sec_col1, sec_col2, sec_col3 = st.columns(3)
 
-                            if is_count_habit or is_multi_completion:
-                                btn_label_y = "Yesterday +1" if is_count_habit else "Yesterday session"
-                                with sec_col1:
-                                    if st.button(btn_label_y, key=f"log_yesterday_{habit_id}", width="stretch"):
-                                        log_habit(habit_id, count=1, log_date=date.today() - timedelta(days=1))
-                                        st.rerun()
-                                with sec_col2:
-                                    pass
-                                with sec_col3:
-                                    pass
-                            elif is_single_completion:
-                                with sec_col1:
-                                    if st.button("Done yesterday", key=f"log_yesterday_{habit_id}", width="stretch"):
-                                        err = log_completion_once_for_date(habit_id, date.today() - timedelta(days=1))
-                                        if err:
-                                            st.info(err)
-                                        st.rerun()
-                                with sec_col2:
-                                    if st.button("Undo", key=f"undo_{habit_id}", width="stretch", disabled=not done_this_period, type="secondary"):
-                                        err = undo_completion_for_current_period(habit_id)
-                                        if err:
-                                            st.info(err)
-                                        st.rerun()
-                                with sec_col3:
-                                    pass
+                            if is_duration:
+                                st.markdown('<div class="action-note">Quick log</div>', unsafe_allow_html=True)
+                                d_col1, d_col2, d_col3, d_col4 = st.columns(4)
+                                for _col, _mins in zip([d_col1, d_col2, d_col3, d_col4], [15, 30, 45, 60]):
+                                    with _col:
+                                        if st.button(f"+{_mins}", key=f"dur_{habit_id}_{_mins}", width="stretch", type="primary"):
+                                            log_habit(habit_id, count=_mins)
+                                            st.rerun()
 
-                            # Pick a date
-                            with st.expander("Pick a date", expanded=False):
-                                _min_d = get_created_date_from_habit(get_habit_by_id(habit_id))
-                                _def_d = max(_min_d, min(date.today() - timedelta(days=1), date.today()))
-                                _custom_d = st.date_input(
-                                    "Log for date",
-                                    value=_def_d,
-                                    min_value=_min_d,
-                                    max_value=date.today(),
-                                    key=f"custom_date_{habit_id}",
-                                )
-                                if is_single_completion:
-                                    if st.button("Mark done for date", key=f"log_custom_{habit_id}", width="stretch"):
-                                        err = log_completion_once_for_date(habit_id, _custom_d)
-                                        if err:
-                                            st.info(err)
+                                st.markdown('<div class="action-note" style="margin-top:0.4rem;">Custom duration</div>', unsafe_allow_html=True)
+                                cust_col1, cust_col2 = st.columns([2, 1])
+                                with cust_col1:
+                                    custom_mins = st.number_input(
+                                        "Minutes",
+                                        min_value=1,
+                                        max_value=480,
+                                        value=20,
+                                        step=5,
+                                        key=f"custom_mins_{habit_id}",
+                                        label_visibility="collapsed",
+                                    )
+                                with cust_col2:
+                                    if st.button("Log", key=f"log_custom_mins_{habit_id}", width="stretch"):
+                                        log_habit(habit_id, count=int(custom_mins))
                                         st.rerun()
-                                else:
-                                    if st.button("Log for date", key=f"log_custom_{habit_id}", width="stretch"):
-                                        log_habit(habit_id, count=1, log_date=_custom_d)
-                                        st.rerun()
+
+                                # Yesterday custom
+                                st.markdown('<div class="action-note" style="margin-top:0.4rem;">Log for yesterday</div>', unsafe_allow_html=True)
+                                y_col1, y_col2, y_col3, y_col4 = st.columns(4)
+                                for _col, _mins in zip([y_col1, y_col2, y_col3, y_col4], [15, 30, 45, 60]):
+                                    with _col:
+                                        if st.button(f"+{_mins}", key=f"dur_y_{habit_id}_{_mins}", width="stretch"):
+                                            log_habit(habit_id, count=_mins, log_date=date.today() - timedelta(days=1))
+                                            st.rerun()
+
+                            else:
+                                sec_col1, sec_col2, sec_col3 = st.columns(3)
+
+                                if is_count_habit or is_multi_completion:
+                                    btn_label_y = "Yesterday +1" if is_count_habit else "Yesterday session"
+                                    with sec_col1:
+                                        if st.button(btn_label_y, key=f"log_yesterday_{habit_id}", width="stretch"):
+                                            log_habit(habit_id, count=1, log_date=date.today() - timedelta(days=1))
+                                            st.rerun()
+                                    with sec_col2:
+                                        pass
+                                    with sec_col3:
+                                        pass
+                                elif is_single_completion:
+                                    with sec_col1:
+                                        if st.button("Done yesterday", key=f"log_yesterday_{habit_id}", width="stretch"):
+                                            err = log_completion_once_for_date(habit_id, date.today() - timedelta(days=1))
+                                            if err:
+                                                st.info(err)
+                                            st.rerun()
+                                    with sec_col2:
+                                        if st.button("Undo", key=f"undo_{habit_id}", width="stretch", disabled=not done_this_period, type="secondary"):
+                                            err = undo_completion_for_current_period(habit_id)
+                                            if err:
+                                                st.info(err)
+                                            st.rerun()
+                                    with sec_col3:
+                                        pass
+
+                            # Pick a date (non-duration only)
+                            if not is_duration:
+                                with st.expander("Pick a date", expanded=False):
+                                    _min_d = get_created_date_from_habit(get_habit_by_id(habit_id))
+                                    _def_d = max(_min_d, min(date.today() - timedelta(days=1), date.today()))
+                                    _custom_d = st.date_input(
+                                        "Log for date",
+                                        value=_def_d,
+                                        min_value=_min_d,
+                                        max_value=date.today(),
+                                        key=f"custom_date_{habit_id}",
+                                    )
+                                    if is_single_completion:
+                                        if st.button("Mark done for date", key=f"log_custom_{habit_id}", width="stretch"):
+                                            err = log_completion_once_for_date(habit_id, _custom_d)
+                                            if err:
+                                                st.info(err)
+                                            st.rerun()
+                                    else:
+                                        if st.button("Log for date", key=f"log_custom_{habit_id}", width="stretch"):
+                                            log_habit(habit_id, count=1, log_date=_custom_d)
+                                            st.rerun()
 
                             # Manage
                             with st.expander("Manage", expanded=False):
@@ -2723,8 +2796,8 @@ with st.expander("Current Progress", expanded=False):
                                 with edit_col1:
                                     edit_habit_type = st.selectbox(
                                         "Habit type",
-                                        options=["count", "completion"],
-                                        format_func=lambda x: "Count" if x == "count" else "Completion",
+                                        options=["count", "completion", "duration"],
+                                        format_func=lambda x: {"count": "Count", "completion": "Completion", "duration": "Duration (min)"}[x],
                                         key=type_key,
                                     )
                                 with edit_col2:
