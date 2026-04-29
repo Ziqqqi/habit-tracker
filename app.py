@@ -97,7 +97,8 @@ def init_db():
     cur.execute("""
         CREATE TABLE IF NOT EXISTS habits (
             id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
+            user_id TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL,
             created_at TEXT NOT NULL,
             is_active INTEGER NOT NULL DEFAULT 1,
             daily_target INTEGER DEFAULT 1,
@@ -119,6 +120,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS habit_logs (
             id SERIAL PRIMARY KEY,
             habit_id INTEGER NOT NULL REFERENCES habits(id),
+            user_id TEXT NOT NULL DEFAULT '',
             logged_at TEXT NOT NULL,
             log_date TEXT NOT NULL,
             count INTEGER NOT NULL DEFAULT 1
@@ -127,6 +129,7 @@ def init_db():
 
     # Migrations — add any missing columns
     for col, defn in [
+        ("user_id", "TEXT NOT NULL DEFAULT ''"),
         ("daily_target", "INTEGER DEFAULT 1"),
         ("habit_type", "TEXT DEFAULT 'count'"),
         ("frequency_type", "TEXT DEFAULT 'daily'"),
@@ -142,6 +145,12 @@ def init_db():
     ]:
         if not column_exists(cur, "habits", col):
             cur.execute(f"ALTER TABLE habits ADD COLUMN {col} {defn}")
+
+    for col, defn in [
+        ("user_id", "TEXT NOT NULL DEFAULT ''"),
+    ]:
+        if not column_exists(cur, "habit_logs", col):
+            cur.execute(f"ALTER TABLE habit_logs ADD COLUMN {col} {defn}")
 
     # Backfill duration habits
     cur.execute("""
@@ -229,6 +238,7 @@ def normalize_habit_inputs(
 
 def add_habit(
     name: str,
+    user_id: str = "",
     habit_type: str = "count",
     frequency_type: str = "daily",
     frequency_value: int = 1,
@@ -268,8 +278,8 @@ def add_habit(
     cur.execute("""
         SELECT id, is_active
         FROM habits
-        WHERE name = %s
-    """, (clean_name,))
+        WHERE name = %s AND user_id = %s
+    """, (clean_name, user_id))
     existing = cur.fetchone()
 
     if existing:
@@ -314,13 +324,14 @@ def add_habit(
 
     cur.execute("""
         INSERT INTO habits (
-            name, created_at, is_active,
+            user_id, name, created_at, is_active,
             daily_target, habit_type, frequency_type, frequency_value, target_count,
             schedule_mode, scheduled_days, reminder_bucket, habit_group, habit_link,
             track_time, estimated_minutes
         )
-        VALUES (%s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
+        user_id,
         clean_name,
         datetime.now().isoformat(),
         normalized["daily_target"],
@@ -342,8 +353,8 @@ def add_habit(
     return "Habit added."
 
 
-def get_active_habits():
-    """Return all active habits."""
+def get_active_habits(user_id: str = ""):
+    """Return all active habits for a user."""
     conn = get_connection()
     cur = conn.cursor()
 
@@ -354,24 +365,24 @@ def get_active_habits():
             schedule_mode, scheduled_days, reminder_bucket, habit_group,
             habit_link, track_time, estimated_minutes
         FROM habits
-        WHERE is_active = 1
+        WHERE is_active = 1 AND user_id = %s
         ORDER BY created_at ASC
-    """)
+    """, (user_id,))
     rows = cur.fetchall()
     conn.close()
     return rows
 
 
-def get_existing_habit_groups(include_default: bool = True) -> list[str]:
+def get_existing_habit_groups(user_id: str = "", include_default: bool = True) -> list[str]:
     """Return existing active habit groups for dropdowns."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
         SELECT DISTINCT COALESCE(NULLIF(TRIM(habit_group), ''), %s) AS habit_group
         FROM habits
-        WHERE is_active = 1
+        WHERE is_active = 1 AND user_id = %s
         ORDER BY habit_group
-    """, (DEFAULT_HABIT_GROUP,))
+    """, (DEFAULT_HABIT_GROUP, user_id))
     groups = [normalize_habit_group(row["habit_group"]) for row in cur.fetchall()]
     conn.close()
 
@@ -400,7 +411,7 @@ def deactivate_habit(habit_id: int):
     conn.close()
 
 
-def log_habit(habit_id: int, count: int = 1, log_date: date | None = None):
+def log_habit(habit_id: int, user_id: str = "", count: int = 1, log_date: date | None = None):
     """Insert one habit log row."""
     now = datetime.now()
     event_date = log_date or now.date()
@@ -409,10 +420,10 @@ def log_habit(habit_id: int, count: int = 1, log_date: date | None = None):
 
     cur.execute(
         """
-        INSERT INTO habit_logs (habit_id, logged_at, log_date, count)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO habit_logs (habit_id, user_id, logged_at, log_date, count)
+        VALUES (%s, %s, %s, %s, %s)
         """,
-        (habit_id, now.isoformat(timespec="seconds"), event_date.isoformat(), count)
+        (habit_id, user_id, now.isoformat(timespec="seconds"), event_date.isoformat(), count)
     )
 
     conn.commit()
@@ -472,7 +483,7 @@ def get_latest_log_id_in_current_period(habit) -> int | None:
     return row["id"] if row else None
 
 
-def log_completion_once_for_current_period(habit_id: int):
+def log_completion_once_for_current_period(habit_id: int, user_id: str = ""):
     """For completion habits with target=1, allow only one completion per current period."""
     habit = get_habit_by_id(habit_id)
     if not habit:
@@ -482,11 +493,11 @@ def log_completion_once_for_current_period(habit_id: int):
     if current_total >= 1:
         return "Already completed for this period."
 
-    log_habit(habit_id, count=1)
+    log_habit(habit_id, user_id=user_id, count=1)
     return None
 
 
-def log_completion_once_for_date(habit_id: int, target_date: date):
+def log_completion_once_for_date(habit_id: int, target_date: date, user_id: str = ""):
     """For completion habits with target=1, allow only one completion in the period containing target_date."""
     habit = get_habit_by_id(habit_id)
     if not habit:
@@ -513,11 +524,11 @@ def log_completion_once_for_date(habit_id: int, target_date: date):
     if int(row["total_count"] or 0) >= 1:
         return "Already completed for that period."
 
-    log_habit(habit_id, count=1, log_date=target_date)
+    log_habit(habit_id, user_id=user_id, count=1, log_date=target_date)
     return None
 
 
-def undo_completion_for_current_period(habit_id: int):
+def undo_completion_for_current_period(habit_id: int, user_id: str = ""):
     """Undo the latest completion event in the current period."""
     habit = get_habit_by_id(habit_id)
     if not habit:
@@ -763,9 +774,9 @@ def get_schedule_status(frequency_type: str, current_count: int, target_count: i
     return "Missed"
 
 
-def get_current_progress():
+def get_current_progress(user_id: str = ""):
     """Return current period progress for each active habit."""
-    habits = get_active_habits()
+    habits = get_active_habits(user_id=user_id)
     conn = get_connection()
     cur = conn.cursor()
 
@@ -837,7 +848,7 @@ def get_current_progress():
     return rows
 
 
-def get_recent_logs(limit: int = 20):
+def get_recent_logs(user_id: str = "", limit: int = 20):
     """Return recent logs in reverse chronological order for active habits only."""
     conn = get_connection()
     cur = conn.cursor()
@@ -855,10 +866,10 @@ def get_recent_logs(limit: int = 20):
             l.count
         FROM habit_logs l
         JOIN habits h ON l.habit_id = h.id
-        WHERE h.is_active = 1
+        WHERE h.is_active = 1 AND h.user_id = %s
         ORDER BY l.logged_at DESC, l.id DESC
         LIMIT %s
-    """, (limit,))
+    """, (user_id, limit))
 
     rows = cur.fetchall()
     conn.close()
@@ -1049,7 +1060,7 @@ def get_successful_period_streak(
     return streak
 
 
-def get_monthly_stats():
+def get_monthly_stats(user_id: str = ""):
     """Return period-aware monthly stats for daily, weekly, and cycle-based habits."""
     today = date.today()
     current_month_start = today.replace(day=1)
@@ -1061,7 +1072,7 @@ def get_monthly_stats():
         prev_month_date = date(today.year, today.month - 1, 1)
     prev_month_start, prev_month_end = get_month_date_range(prev_month_date)
 
-    habits = get_active_habits()
+    habits = get_active_habits(user_id=user_id)
     stats = []
 
     for habit in habits:
@@ -2339,6 +2350,28 @@ hr {
 
 init_db()
 
+# ── Login wall ──
+if not st.user.is_logged_in:
+    st.markdown("""
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:1.5rem;">
+        <svg width="56" height="56" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="16" cy="16" r="15" fill="#fef3eb" stroke="#e8a87c" stroke-width="1.5"/>
+            <path d="M9 16.5l5 5 9-9" stroke="#c2622d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+        <div style="text-align:center;">
+            <h1 style="font-size:1.8rem;font-weight:600;letter-spacing:-0.03em;color:#1c1612;margin-bottom:0.3rem;">Habit Tracker</h1>
+            <p style="color:#7a6355;font-size:0.9rem;margin:0;">Sign in to track your habits</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        st.button("Sign in with Google", on_click=st.login, use_container_width=True, type="primary")
+    st.stop()
+
+# User is logged in — get their ID
+current_user_id = st.user.email or st.user.sub or ""
+
 # Custom SVG favicon — terracotta checkmark circle
 st.markdown("""
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23fef3eb' stroke='%23e8a87c' stroke-width='1.5'/%3E%3Cpath d='M9 16.5l5 5 9-9' stroke='%23c2622d' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
@@ -2356,6 +2389,13 @@ st.markdown("""
     <p style="margin: 0 !important; font-size: 0.82rem !important; color: #b0988a !important; padding-left: 2.6rem;">Track your habits with period-aware progress and smart scheduling.</p>
 </div>
 """, unsafe_allow_html=True)
+
+# User info + logout in top right
+_user_col, _logout_col = st.columns([4, 1])
+with _user_col:
+    st.markdown(f'<div style="font-size:0.78rem;color:var(--ht-ink-3);padding:0.2rem 0;">👤 {st.user.name or st.user.email}</div>', unsafe_allow_html=True)
+with _logout_col:
+    st.button("Sign out", on_click=st.logout, type="secondary")
 
 
 with st.expander("Add a New Habit", expanded=False):
@@ -2412,7 +2452,7 @@ with st.expander("Add a New Habit", expanded=False):
             index=0,
         )
 
-        existing_groups = get_existing_habit_groups()
+        existing_groups = get_existing_habit_groups(user_id=current_user_id)
         create_new_group_label = "+ Create new group"
         group_choice = st.selectbox(
             "Group",
@@ -2471,6 +2511,7 @@ with st.expander("Add a New Habit", expanded=False):
             if new_habit.strip():
                 result = add_habit(
                     name=new_habit,
+                    user_id=current_user_id,
                     habit_type=habit_type,
                     frequency_type=frequency_type,
                     frequency_value=int(frequency_value),
@@ -2497,7 +2538,7 @@ with st.expander("Add a New Habit", expanded=False):
 
 # ── Review & Preview ──
 with st.expander("Review & Preview", expanded=False):
-    _progress_for_rp = get_current_progress()
+    _progress_for_rp = get_current_progress(user_id=current_user_id)
     today_all, today_done, tomorrow_due = get_review_preview(_progress_for_rp)
 
     today_label = date.today().strftime("%b %d")
@@ -2613,7 +2654,7 @@ with st.expander("Review & Preview", expanded=False):
 with st.expander("Current Progress", expanded=False):
     st.markdown('<div class="expander-note">Your active habits for the current period.</div>', unsafe_allow_html=True)
 
-    progress_rows = get_current_progress()
+    progress_rows = get_current_progress(user_id=current_user_id)
 
     if progress_rows:
         completed_count = 0
@@ -2746,24 +2787,24 @@ with st.expander("Current Progress", expanded=False):
                                 else:
                                     # Quick +15 button as primary
                                     if st.button("+ 15 min", key=f"log_{habit_id}", width="stretch", type="primary"):
-                                        log_habit(habit_id, count=15)
+                                        log_habit(habit_id, user_id=current_user_id, count=15)
                                         st.rerun()
                             elif is_single_completion:
                                 if done_this_period:
                                     st.button("✓ Done", key=f"log_{habit_id}", width="stretch", disabled=True)
                                 else:
                                     if st.button("Mark done", key=f"log_{habit_id}", width="stretch", type="primary"):
-                                        err = log_completion_once_for_current_period(habit_id)
+                                        err = log_completion_once_for_current_period(habit_id, user_id=current_user_id)
                                         if err:
                                             st.info(err)
                                         st.rerun()
                             elif is_count_habit:
                                 if st.button("+ Check in", key=f"log_{habit_id}", width="stretch", type="primary"):
-                                    log_habit(habit_id, count=1)
+                                    log_habit(habit_id, user_id=current_user_id, count=1)
                                     st.rerun()
                             else:
                                 if st.button("+ Session", key=f"log_{habit_id}", width="stretch", type="primary"):
-                                    log_habit(habit_id, count=1)
+                                    log_habit(habit_id, user_id=current_user_id, count=1)
                                     st.rerun()
 
                         if link_col:
@@ -2782,7 +2823,7 @@ with st.expander("Current Progress", expanded=False):
                                 for _col, _mins in zip([d_col1, d_col2, d_col3, d_col4], [15, 30, 45, 60]):
                                     with _col:
                                         if st.button(f"+{_mins}", key=f"dur_{habit_id}_{_mins}", width="stretch", type="primary"):
-                                            log_habit(habit_id, count=_mins)
+                                            log_habit(habit_id, user_id=current_user_id, count=_mins)
                                             st.rerun()
 
                                 st.markdown('<div class="action-note" style="margin-top:0.4rem;">Custom duration</div>', unsafe_allow_html=True)
@@ -2799,7 +2840,7 @@ with st.expander("Current Progress", expanded=False):
                                     )
                                 with cust_col2:
                                     if st.button("Log", key=f"log_custom_mins_{habit_id}", width="stretch"):
-                                        log_habit(habit_id, count=int(custom_mins))
+                                        log_habit(habit_id, user_id=current_user_id, count=int(custom_mins))
                                         st.rerun()
 
                                 # Yesterday custom
@@ -2808,7 +2849,7 @@ with st.expander("Current Progress", expanded=False):
                                 for _col, _mins in zip([y_col1, y_col2, y_col3, y_col4], [15, 30, 45, 60]):
                                     with _col:
                                         if st.button(f"+{_mins}", key=f"dur_y_{habit_id}_{_mins}", width="stretch"):
-                                            log_habit(habit_id, count=_mins, log_date=date.today() - timedelta(days=1))
+                                            log_habit(habit_id, user_id=current_user_id, count=_mins, log_date=date.today() - timedelta(days=1))
                                             st.rerun()
 
                             else:
@@ -2818,7 +2859,7 @@ with st.expander("Current Progress", expanded=False):
                                     btn_label_y = "Yesterday +1" if is_count_habit else "Yesterday session"
                                     with sec_col1:
                                         if st.button(btn_label_y, key=f"log_yesterday_{habit_id}", width="stretch"):
-                                            log_habit(habit_id, count=1, log_date=date.today() - timedelta(days=1))
+                                            log_habit(habit_id, user_id=current_user_id, count=1, log_date=date.today() - timedelta(days=1))
                                             st.rerun()
                                     with sec_col2:
                                         pass
@@ -2827,13 +2868,13 @@ with st.expander("Current Progress", expanded=False):
                                 elif is_single_completion:
                                     with sec_col1:
                                         if st.button("Done yesterday", key=f"log_yesterday_{habit_id}", width="stretch"):
-                                            err = log_completion_once_for_date(habit_id, date.today() - timedelta(days=1))
+                                            err = log_completion_once_for_date(habit_id, date.today() - timedelta(days=1), user_id=current_user_id)
                                             if err:
                                                 st.info(err)
                                             st.rerun()
                                     with sec_col2:
                                         if st.button("Undo", key=f"undo_{habit_id}", width="stretch", disabled=not done_this_period, type="secondary"):
-                                            err = undo_completion_for_current_period(habit_id)
+                                            err = undo_completion_for_current_period(habit_id, user_id=current_user_id)
                                             if err:
                                                 st.info(err)
                                             st.rerun()
@@ -2854,13 +2895,13 @@ with st.expander("Current Progress", expanded=False):
                                     )
                                     if is_single_completion:
                                         if st.button("Mark done for date", key=f"log_custom_{habit_id}", width="stretch"):
-                                            err = log_completion_once_for_date(habit_id, _custom_d)
+                                            err = log_completion_once_for_date(habit_id, _custom_d, user_id=current_user_id)
                                             if err:
                                                 st.info(err)
                                             st.rerun()
                                     else:
                                         if st.button("Log for date", key=f"log_custom_{habit_id}", width="stretch"):
-                                            log_habit(habit_id, count=1, log_date=_custom_d)
+                                            log_habit(habit_id, user_id=current_user_id, count=1, log_date=_custom_d)
                                             st.rerun()
 
                             # Manage
@@ -2965,7 +3006,7 @@ with st.expander("Current Progress", expanded=False):
                                         key=reminder_bucket_key,
                                     )
                                 with edit_meta_col2:
-                                    existing_groups = get_existing_habit_groups()
+                                    existing_groups = get_existing_habit_groups(user_id=current_user_id)
                                     current_group = normalize_habit_group(st.session_state.get(habit_group_key, DEFAULT_HABIT_GROUP))
                                     if current_group not in existing_groups:
                                         existing_groups.append(current_group)
@@ -3054,7 +3095,7 @@ with st.expander("Current Progress", expanded=False):
 
                 st.markdown('</div>', unsafe_allow_html=True)
 with st.expander("Recent log details", expanded=False):
-    today_logs = get_recent_logs()
+    today_logs = get_recent_logs(user_id=current_user_id)
     if not today_logs:
         st.write("No recent logs yet.")
     else:
@@ -3071,7 +3112,7 @@ with st.expander("Recent log details", expanded=False):
                     st.rerun()
 
 
-analytics_habits = get_active_habits()
+analytics_habits = get_active_habits(user_id=user_id)
 analytics_habit_map = {habit["id"]: habit for habit in analytics_habits}
 analytics_options = [habit["id"] for habit in analytics_habits]
 selected_analytics_habit_id = None
@@ -3177,7 +3218,7 @@ with st.expander("Analytics", expanded=False):
 
         # ── Monthly Statistics ──
         with st.expander("Monthly Statistics", expanded=False):
-            monthly_stats = get_monthly_stats()
+            monthly_stats = get_monthly_stats(user_id=current_user_id)
             monthly_stat_map = {stat["habit_id"]: stat for stat in monthly_stats}
             if not monthly_stats:
                 st.write("No habits available for statistics yet.")
