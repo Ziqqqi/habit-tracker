@@ -2387,6 +2387,13 @@ st.markdown("""
 # ── Add a New Habit ──
 with st.expander("Add a New Habit", expanded=False):
     st.markdown('<div class="expander-note">Start simple. You can always edit the rule later.</div>', unsafe_allow_html=True)
+
+    # estimated_minutes lives outside the form to prevent reset on re-render
+    if "add_track_time" not in st.session_state:
+        st.session_state["add_track_time"] = False
+    if "add_estimated_minutes" not in st.session_state:
+        st.session_state["add_estimated_minutes"] = 15
+
     with st.form("add_habit_form", clear_on_submit=True):
             new_habit = st.text_input(
                 "Habit name",
@@ -2412,32 +2419,45 @@ with st.expander("Add a New Habit", expanded=False):
                     }[x],
                 )
 
-            freq_col1, freq_col2 = st.columns(2)
-            with freq_col1:
+            # For x_per_week: target = frequency (no separate target field)
+            # For every_n_days: show N input + target
+            # For daily/weekly: no extra inputs needed
+            if frequency_type == "x_per_week":
                 frequency_value = st.number_input(
-                    "Frequency value (N)",
-                    min_value=1,
-                    value=1,
-                    step=1,
-                    help="For 'X times/week' or 'Every N days'. Ignored for Daily/Weekly.",
+                    "How many times per week?",
+                    min_value=1, value=3, step=1,
                 )
-            with freq_col2:
-                target_label = "Target (min)" if habit_type == "duration" else "Target count per period"
-                target_step = 15 if habit_type == "duration" else 1
-                target_default = 60 if habit_type == "duration" else 1
-                target_count = st.number_input(
-                    target_label,
-                    min_value=1,
-                    value=target_default,
-                    step=target_step,
-                )
+                target_count = frequency_value  # target = frequency
 
-            reminder_bucket = st.selectbox(
-                "Time of day",
-                options=[key for key, _ in REMINDER_BUCKET_OPTIONS],
-                format_func=lambda x: REMINDER_BUCKET_LABEL_MAP[x],
-                index=0,
-            )
+            elif frequency_type == "every_n_days":
+                freq_col1, freq_col2 = st.columns(2)
+                with freq_col1:
+                    frequency_value = st.number_input(
+                        "Repeat every N days",
+                        min_value=1, value=2, step=1,
+                    )
+                with freq_col2:
+                    if habit_type == "duration":
+                        target_count = st.number_input("Target (min)", min_value=1, value=60, step=15)
+                    else:
+                        target_count = st.number_input("Target count", min_value=1, value=1, step=1)
+
+            elif frequency_type == "weekly":
+                frequency_value = 1
+                if habit_type == "duration":
+                    target_count = st.number_input("Target (min) this week", min_value=1, value=60, step=15)
+                else:
+                    target_count = 1  # weekly = once
+
+            else:  # daily
+                frequency_value = 1
+                if habit_type == "duration":
+                    target_count = st.number_input("Daily target (min)", min_value=1, value=60, step=15)
+                else:
+                    target_count = st.number_input("Daily target", min_value=1, value=1, step=1)
+
+            # Time of day hidden — default to anytime
+            reminder_bucket = "anytime"
 
             existing_groups = get_existing_habit_groups(user_id=current_user_id)
             create_new_group_label = "+ Create new group"
@@ -2466,21 +2486,30 @@ with st.expander("Add a New Habit", expanded=False):
                 format_func=lambda x: WEEKDAY_LABEL_MAP[x],
             )
 
-            track_time = st.checkbox(
+            track_time_form = st.checkbox(
                 "Track time for this habit",
-                value=False,
+                value=st.session_state["add_track_time"],
                 help="Include this habit's estimated duration in Review & Preview time totals.",
+                key="add_track_time_checkbox",
             )
-            estimated_minutes = 0
-            if track_time and habit_type != "duration":
-                estimated_minutes = st.number_input(
-                    "Estimated duration (min)",
-                    min_value=1, max_value=480, value=30, step=5,
-                )
 
             submitted = st.form_submit_button("Add habit", use_container_width=True, type="primary")
 
-            if submitted:
+    # estimated_minutes outside form — stable across re-renders
+    if track_time_form and habit_type != "duration":
+        st.session_state["add_estimated_minutes"] = st.number_input(
+            "Estimated duration (min)",
+            min_value=1, max_value=480,
+            value=st.session_state["add_estimated_minutes"],
+            step=5,
+            help="How many minutes does this habit take?",
+            key="add_est_mins_input",
+        )
+        estimated_minutes = st.session_state["add_estimated_minutes"]
+    else:
+        estimated_minutes = 0
+
+    if submitted:
                 if group_choice == create_new_group_label:
                     habit_group = habit_group_custom.strip() or DEFAULT_HABIT_GROUP
                 else:
@@ -2504,14 +2533,18 @@ with st.expander("Add a New Habit", expanded=False):
                         scheduled_days=selected_days,
                         reminder_bucket=reminder_bucket,
                         habit_group=habit_group,
-                        track_time=bool(track_time),
+                        track_time=bool(track_time_form),
                         estimated_minutes=int(estimated_minutes),
                     )
                     if result == "Habit added.":
                         st.success(f"Added: {new_habit.strip()}")
+                        st.session_state["add_track_time"] = False
+                        st.session_state["add_estimated_minutes"] = 15
                         st.rerun()
                     elif result == "Habit restored.":
                         st.success(f"Restored: {new_habit.strip()}")
+                        st.session_state["add_track_time"] = False
+                        st.session_state["add_estimated_minutes"] = 15
                         st.rerun()
                     else:
                         st.warning(result)
