@@ -2414,6 +2414,194 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ── Timer ──
+with st.expander("⏱ Timer", expanded=False):
+    # Get duration and completion habits for log association
+    _timer_habits = [
+        r for r in get_current_progress(user_id=current_user_id)
+        if r["habit_type"] in {"duration", "completion", "count"}
+    ]
+    _timer_options = {r["habit_id"]: r["habit_name"] for r in _timer_habits}
+
+    timer_col1, timer_col2 = st.columns([2, 1])
+    with timer_col1:
+        selected_timer_habit_id = st.selectbox(
+            "Associate with habit (optional)",
+            options=[None] + list(_timer_options.keys()),
+            format_func=lambda x: "— No habit —" if x is None else _timer_options[x],
+            key="timer_habit_id",
+        )
+    with timer_col2:
+        timer_preset = st.selectbox(
+            "Preset",
+            options=[15, 20, 30, 45, 60, 90],
+            format_func=lambda x: f"{x} min",
+            key="timer_preset",
+        )
+
+    # JS Timer — runs entirely in browser, no Streamlit rerenders
+    st.markdown(f"""
+    <div id="ht-timer-box" style="
+        background: var(--ht-bg-2);
+        border: 1px solid var(--ht-line);
+        border-radius: var(--ht-radius-lg);
+        padding: 1.5rem 1rem 1.2rem;
+        text-align: center;
+        margin: 0.5rem 0 0.75rem 0;
+    ">
+        <div id="ht-timer-display" style="
+            font-size: 3.5rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            color: var(--ht-ink);
+            font-family: var(--ht-mono);
+            line-height: 1;
+            margin-bottom: 0.75rem;
+        ">00:00:00</div>
+
+        <div style="display:flex;justify-content:center;gap:0.5rem;margin-bottom:0.75rem;">
+            <button onclick="htTimerStart()" id="ht-btn-start" style="
+                background:#c2622d;color:#fff;border:none;
+                padding:0.4rem 1.1rem;border-radius:999px;
+                font-size:0.85rem;font-weight:600;cursor:pointer;">▶ Start</button>
+            <button onclick="htTimerPause()" id="ht-btn-pause" style="
+                background:var(--ht-bg-3);color:var(--ht-ink-2);border:1px solid var(--ht-line);
+                padding:0.4rem 1.1rem;border-radius:999px;
+                font-size:0.85rem;font-weight:600;cursor:pointer;">⏸ Pause</button>
+            <button onclick="htTimerReset()" style="
+                background:var(--ht-bg-3);color:var(--ht-ink-2);border:1px solid var(--ht-line);
+                padding:0.4rem 1.1rem;border-radius:999px;
+                font-size:0.85rem;font-weight:600;cursor:pointer;">↺ Reset</button>
+        </div>
+
+        <div style="display:flex;justify-content:center;gap:0.4rem;flex-wrap:wrap;">
+            <span style="font-size:0.72rem;color:var(--ht-ink-3);margin-right:0.3rem;line-height:2;">Preset:</span>
+            {"".join(f'<button onclick="htSetTimer({m*60})" style="background:var(--ht-accent-2);color:var(--ht-accent-text);border:1px solid rgba(194,98,45,0.2);padding:0.2rem 0.65rem;border-radius:999px;font-size:0.75rem;font-weight:600;cursor:pointer;">{m}m</button>' for m in [15, 20, 30, 45, 60, 90])}
+        </div>
+
+        <div id="ht-timer-done" style="display:none;margin-top:0.75rem;">
+            <div style="color:var(--ht-green-text);font-weight:700;font-size:1rem;margin-bottom:0.3rem;">
+                ✓ Time's up!
+            </div>
+            <div id="ht-timer-elapsed" style="font-size:0.82rem;color:var(--ht-ink-3);"></div>
+        </div>
+    </div>
+
+    <script>
+    (function() {{
+        let _total = {timer_preset} * 60;
+        let _remaining = _total;
+        let _interval = null;
+        let _running = false;
+        let _elapsed = 0;
+        let _startTime = null;
+
+        function _fmt(s) {{
+            let h = Math.floor(s / 3600);
+            let m = Math.floor((s % 3600) / 60);
+            let sec = s % 60;
+            return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+        }}
+
+        function _update() {{
+            document.getElementById('ht-timer-display').textContent = _fmt(_remaining);
+        }}
+
+        window.htSetTimer = function(seconds) {{
+            htTimerReset();
+            _total = seconds;
+            _remaining = seconds;
+            _update();
+        }};
+
+        window.htTimerStart = function() {{
+            if (_running) return;
+            _running = true;
+            _startTime = _startTime || Date.now();
+            _interval = setInterval(function() {{
+                if (_remaining <= 0) {{
+                    clearInterval(_interval);
+                    _running = false;
+                    _remaining = 0;
+                    _update();
+                    _elapsed = Math.round((Date.now() - _startTime) / 1000);
+                    // Beep
+                    try {{
+                        let ctx = new (window.AudioContext || window.webkitAudioContext)();
+                        for (let i = 0; i < 3; i++) {{
+                            let osc = ctx.createOscillator();
+                            let gain = ctx.createGain();
+                            osc.connect(gain);
+                            gain.connect(ctx.destination);
+                            osc.frequency.value = 880;
+                            gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.4);
+                            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.4 + 0.3);
+                            osc.start(ctx.currentTime + i * 0.4);
+                            osc.stop(ctx.currentTime + i * 0.4 + 0.3);
+                        }}
+                    }} catch(e) {{}}
+                    // Show done banner
+                    document.getElementById('ht-timer-done').style.display = 'block';
+                    let elMin = Math.round(_elapsed / 60);
+                    document.getElementById('ht-timer-elapsed').textContent = 'Elapsed: ~' + elMin + ' min';
+                    document.getElementById('ht-timer-display').style.color = 'var(--ht-green-text)';
+                    return;
+                }}
+                _remaining--;
+                _update();
+            }}, 1000);
+        }};
+
+        window.htTimerPause = function() {{
+            if (!_running) return;
+            clearInterval(_interval);
+            _running = false;
+        }};
+
+        window.htTimerReset = function() {{
+            clearInterval(_interval);
+            _running = false;
+            _remaining = _total;
+            _elapsed = 0;
+            _startTime = null;
+            _update();
+            document.getElementById('ht-timer-done').style.display = 'none';
+            document.getElementById('ht-timer-display').style.color = 'var(--ht-ink)';
+        }};
+
+        _update();
+    }})();
+    </script>
+    """, unsafe_allow_html=True)
+
+    # Log button — Streamlit side
+    if selected_timer_habit_id is not None:
+        _sel_habit = next((r for r in _timer_habits if r["habit_id"] == selected_timer_habit_id), None)
+        if _sel_habit:
+            _is_dur = _sel_habit["habit_type"] == "duration"
+            log_mins_col, _ = st.columns([1, 2])
+            with log_mins_col:
+                if _is_dur:
+                    _log_mins = st.number_input(
+                        "Minutes to log",
+                        min_value=1, max_value=480,
+                        value=int(timer_preset),
+                        step=5,
+                        key="timer_log_mins",
+                    )
+                    if st.button(f"Log {int(_log_mins)} min → {_sel_habit['habit_name']}", type="primary", key="timer_log_btn"):
+                        log_habit(selected_timer_habit_id, user_id=current_user_id, count=int(_log_mins))
+                        st.success(f"Logged {int(_log_mins)} min to {_sel_habit['habit_name']}!")
+                        st.rerun()
+                else:
+                    if st.button(f"Mark done → {_sel_habit['habit_name']}", type="primary", key="timer_log_btn"):
+                        err = log_completion_once_for_current_period(selected_timer_habit_id, user_id=current_user_id)
+                        if err:
+                            st.info(err)
+                        else:
+                            st.success(f"Marked done: {_sel_habit['habit_name']}!")
+                        st.rerun()
+
 # ── Add a New Habit ──
 with st.expander("Add a New Habit", expanded=False):
     st.markdown('<div class="expander-note">Start simple. You can always edit the rule later.</div>', unsafe_allow_html=True)
