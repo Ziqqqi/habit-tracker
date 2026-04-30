@@ -2,10 +2,22 @@
 
 import psycopg2
 import psycopg2.extras
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 from calendar import monthrange
 import streamlit as st
 import pandas as pd
+
+# App timezone — Eastern Time
+APP_TZ = ZoneInfo("America/New_York")
+
+
+def now_local() -> datetime:
+    return datetime.now(APP_TZ)
+
+
+def today_local() -> date:
+    return now_local().date()
 
 WEEKDAY_OPTIONS = [(0, "Mon"), (1, "Tue"), (2, "Wed"), (3, "Thu"), (4, "Fri"), (5, "Sat"), (6, "Sun")]
 WEEKDAY_LABEL_MAP = {idx: label for idx, label in WEEKDAY_OPTIONS}
@@ -63,7 +75,7 @@ def format_reminder_bucket_label(value: str | None) -> str:
 
 
 def format_target_date_short(target_date: date) -> str:
-    today = date.today()
+    today = today_local()
     if target_date == today:
         return "today"
     if target_date == (today - timedelta(days=1)):
@@ -334,7 +346,7 @@ def add_habit(
     """, (
         user_id,
         clean_name,
-        datetime.now().isoformat(),
+        now_local().isoformat(),
         normalized["daily_target"],
         normalized["habit_type"],
         normalized["frequency_type"],
@@ -418,7 +430,7 @@ def deactivate_habit(habit_id: int):
 
 def log_habit(habit_id: int, user_id: str = "", count: int = 1, log_date: date | None = None):
     """Insert one habit log row."""
-    now = datetime.now()
+    now = now_local()
     event_date = log_date or now.date()
     conn = get_connection()
     cur = conn.cursor()
@@ -448,7 +460,7 @@ def get_habit_by_id(habit_id: int):
 def get_current_period_total_for_habit(habit) -> int:
     frequency_type, frequency_value, _, created_date = get_period_targets(habit)
     period = get_current_period_info(frequency_type, frequency_value, created_date)
-    query_end = min(period["end_date"], date.today())
+    query_end = min(period["end_date"], today_local())
 
     conn = get_connection()
     cur = conn.cursor()
@@ -469,7 +481,7 @@ def get_current_period_total_for_habit(habit) -> int:
 def get_latest_log_id_in_current_period(habit) -> int | None:
     frequency_type, frequency_value, _, created_date = get_period_targets(habit)
     period = get_current_period_info(frequency_type, frequency_value, created_date)
-    query_end = min(period["end_date"], date.today())
+    query_end = min(period["end_date"], today_local())
 
     conn = get_connection()
     cur = conn.cursor()
@@ -511,7 +523,7 @@ def log_completion_once_for_date(habit_id: int, target_date: date, user_id: str 
 
     frequency_type, frequency_value, _, created_date = get_period_targets(habit)
     period = get_period_info_for_date(frequency_type, frequency_value, target_date, created_date)
-    query_end = min(period["end_date"], date.today())
+    query_end = min(period["end_date"], today_local())
 
     conn = get_connection()
     cur = conn.cursor()
@@ -617,7 +629,7 @@ def update_habit(
 def get_created_date_from_habit(habit) -> date:
     created_raw = habit["created_at"] if "created_at" in habit.keys() else None
     if not created_raw:
-        return date.today()
+        return today_local()
     return datetime.fromisoformat(created_raw).date()
 
 
@@ -641,7 +653,7 @@ def get_period_info_for_date(
     if frequency_type in {"x_per_week", "weekly"}:
         week_start = get_week_start(reference_date)
         week_end = week_start + timedelta(days=6)
-        label_prefix = "This week" if reference_date == date.today() else "Selected week"
+        label_prefix = "This week" if reference_date == today_local() else "Selected week"
         return {
             "start_date": week_start,
             "end_date": week_end,
@@ -651,14 +663,14 @@ def get_period_info_for_date(
     if frequency_type == "every_n_days":
         cycle_start = get_cycle_start(anchor_date, reference_date, frequency_value)
         cycle_end = cycle_start + timedelta(days=frequency_value - 1)
-        label_prefix = "Current cycle" if reference_date == date.today() else "Selected cycle"
+        label_prefix = "Current cycle" if reference_date == today_local() else "Selected cycle"
         return {
             "start_date": cycle_start,
             "end_date": cycle_end,
             "label": f"{label_prefix} ({cycle_start.isoformat()} → {cycle_end.isoformat()})"
         }
 
-    label_prefix = "Today" if reference_date == date.today() else reference_date.strftime("%b %d")
+    label_prefix = "Today" if reference_date == today_local() else reference_date.strftime("%b %d")
     return {
         "start_date": reference_date,
         "end_date": reference_date,
@@ -668,7 +680,7 @@ def get_period_info_for_date(
 
 def get_current_period_info(frequency_type: str, frequency_value: int, anchor_date: date | None = None):
     """Return period range and display text for supported v3 frequency types."""
-    return get_period_info_for_date(frequency_type, frequency_value, date.today(), anchor_date)
+    return get_period_info_for_date(frequency_type, frequency_value, today_local(), anchor_date)
 
 
 def format_minutes(minutes: int) -> str:
@@ -758,7 +770,7 @@ def get_schedule_status(frequency_type: str, current_count: int, target_count: i
     if schedule_mode != "weekdays" or not days or frequency_type not in {"x_per_week", "weekly"}:
         return None
 
-    today = date.today()
+    today = today_local()
     today_idx = today.weekday()
 
     if frequency_type == "weekly":
@@ -805,7 +817,7 @@ def get_current_progress(user_id: str = ""):
         anchor_date = get_created_date_from_habit(habit)
 
         period = get_current_period_info(frequency_type, frequency_value, anchor_date)
-        query_end = min(period["end_date"], date.today())
+        query_end = min(period["end_date"], today_local())
 
         cur.execute("""
             SELECT
@@ -903,7 +915,7 @@ def format_recent_log_event_text(log) -> str:
         return base_text
 
     event_date = date.fromisoformat(str(log_date_value))
-    today = date.today()
+    today = today_local()
     if event_date == today:
         date_text = "today"
     elif event_date == (today - timedelta(days=1)):
@@ -965,7 +977,7 @@ def format_last_checkin_text(logged_at: str | None) -> str:
         return "No check-ins yet"
 
     dt = datetime.fromisoformat(logged_at)
-    now = datetime.now()
+    now = now_local()
     today = now.date()
     if dt.date() == today:
         return f"Today {dt.strftime('%I:%M %p').lstrip('0')}"
@@ -1045,7 +1057,7 @@ def get_successful_period_streak(
     target_count: int,
     anchor_date: date,
 ):
-    today = date.today()
+    today = today_local()
 
     if frequency_type == "daily":
         lookback_start = today - timedelta(days=730)
@@ -1074,7 +1086,7 @@ def get_successful_period_streak(
 @st.cache_data(ttl=60)
 def get_monthly_stats(user_id: str = ""):
     """Return period-aware monthly stats for daily, weekly, and cycle-based habits."""
-    today = date.today()
+    today = today_local()
     current_month_start = today.replace(day=1)
     current_month_end = today
 
@@ -1166,7 +1178,7 @@ def get_recent_period_data(habit, max_periods: int = 12):
     and every-n-days habits show recent cycles.
     """
     frequency_type, frequency_value, target_count, created_date = get_period_targets(habit)
-    today = date.today()
+    today = today_local()
 
     if frequency_type == "daily":
         range_start = today - timedelta(days=29)
@@ -1229,7 +1241,7 @@ def get_recent_period_data(habit, max_periods: int = 12):
 
 
 def get_recent_month_options(num_months: int = 6):
-    today = date.today().replace(day=1)
+    today = today_local().replace(day=1)
     months = []
     cursor = today
     for _ in range(num_months):
@@ -1305,7 +1317,7 @@ def get_review_preview(progress_rows: list) -> tuple[list, list, list]:
     today_done   — habits completed this period, for time calculation only.
     tomorrow_due — habits that will need a check-in tomorrow.
     """
-    today = date.today()
+    today = today_local()
     tomorrow = today + timedelta(days=1)
     tomorrow_idx = tomorrow.weekday()
 
@@ -2366,7 +2378,7 @@ init_db()
 current_user_id = "default_user"
 
 # Clear cache when the date changes (ensures daily habits reset correctly)
-_today_str = date.today().isoformat()
+_today_str = today_local().isoformat()
 if st.session_state.get("_cached_date") != _today_str:
     st.cache_data.clear()
     st.session_state["_cached_date"] = _today_str
@@ -2564,8 +2576,8 @@ with st.expander("Review & Preview", expanded=False):
     _progress_for_rp = get_current_progress(user_id=current_user_id)
     today_all, today_done, tomorrow_due = get_review_preview(_progress_for_rp)
 
-    today_label = date.today().strftime("%b %d")
-    tomorrow_label = (date.today() + timedelta(days=1)).strftime("%b %d")
+    today_label = today_local().strftime("%b %d")
+    tomorrow_label = (today_local() + timedelta(days=1)).strftime("%b %d")
 
     # Time summaries — today uses today_all for display, today_done for "done" calc
     today_total_mins, today_by_group = compute_time_summary(today_all)
@@ -2872,7 +2884,7 @@ with st.expander("Current Progress", expanded=False):
                                 for _col, _mins in zip([y_col1, y_col2, y_col3, y_col4], [15, 30, 45, 60]):
                                     with _col:
                                         if st.button(f"+{_mins}", key=f"dur_y_{habit_id}_{_mins}", width="stretch"):
-                                            log_habit(habit_id, user_id=current_user_id, count=_mins, log_date=date.today() - timedelta(days=1))
+                                            log_habit(habit_id, user_id=current_user_id, count=_mins, log_date=today_local() - timedelta(days=1))
                                             st.rerun()
 
                             else:
@@ -2882,7 +2894,7 @@ with st.expander("Current Progress", expanded=False):
                                     btn_label_y = "Yesterday +1" if is_count_habit else "Yesterday session"
                                     with sec_col1:
                                         if st.button(btn_label_y, key=f"log_yesterday_{habit_id}", width="stretch"):
-                                            log_habit(habit_id, user_id=current_user_id, count=1, log_date=date.today() - timedelta(days=1))
+                                            log_habit(habit_id, user_id=current_user_id, count=1, log_date=today_local() - timedelta(days=1))
                                             st.rerun()
                                     with sec_col2:
                                         pass
@@ -2891,7 +2903,7 @@ with st.expander("Current Progress", expanded=False):
                                 elif is_single_completion:
                                     with sec_col1:
                                         if st.button("Done yesterday", key=f"log_yesterday_{habit_id}", width="stretch"):
-                                            err = log_completion_once_for_date(habit_id, date.today() - timedelta(days=1), user_id=current_user_id)
+                                            err = log_completion_once_for_date(habit_id, today_local() - timedelta(days=1), user_id=current_user_id)
                                             if err:
                                                 st.info(err)
                                             st.rerun()
@@ -2908,12 +2920,12 @@ with st.expander("Current Progress", expanded=False):
                             if not is_duration:
                                 with st.expander("Pick a date", expanded=False):
                                     _min_d = get_created_date_from_habit(get_habit_by_id(habit_id))
-                                    _def_d = max(_min_d, min(date.today() - timedelta(days=1), date.today()))
+                                    _def_d = max(_min_d, min(today_local() - timedelta(days=1), today_local()))
                                     _custom_d = st.date_input(
                                         "Log for date",
                                         value=_def_d,
                                         min_value=_min_d,
-                                        max_value=date.today(),
+                                        max_value=today_local(),
                                         key=f"custom_date_{habit_id}",
                                     )
                                     if is_single_completion:
