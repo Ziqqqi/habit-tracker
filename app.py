@@ -1352,6 +1352,7 @@ def get_review_preview(progress_rows: list) -> tuple[list, list, list]:
             else:
                 include_today = True  # unscheduled weekly — always show
         elif frequency_type == "every_n_days":
+            # Always show in today (completed shows as strikethrough, pending shows as todo)
             include_today = True
 
         if include_today:
@@ -1379,7 +1380,18 @@ def get_review_preview(progress_rows: list) -> tuple[list, list, list]:
                     if remaining > 0 and remaining >= days_left_after_tomorrow:
                         tomorrow_due.append(row)
             elif frequency_type == "every_n_days":
-                tomorrow_due.append(row)
+                # Parse period end date from period_label e.g. "Current cycle (2026-04-29 → 2026-04-30)"
+                frequency_value = int(row.get("frequency_value", 2) or 2)
+                period_label = row.get("period_label", "")
+                try:
+                    # Extract end date from label "... → YYYY-MM-DD)"
+                    period_end = date.fromisoformat(period_label.split("→")[-1].strip().rstrip(")"))
+                    if period_end < tomorrow:
+                        # Period ends today or earlier → tomorrow is a new period → show
+                        tomorrow_due.append(row)
+                except Exception:
+                    # Fallback: show tomorrow
+                    tomorrow_due.append(row)
 
     bucket_order = {"morning": 0, "afternoon": 1, "evening": 2, "anytime": 3}
     today_all.sort(key=lambda x: bucket_order.get(x["reminder_bucket"], 3))
