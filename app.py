@@ -2439,144 +2439,126 @@ with st.expander("⏱ Timer", expanded=False):
             key="timer_preset",
         )
 
-    # JS Timer — runs entirely in browser, no Streamlit rerenders
+    import streamlit.components.v1 as components
+
+    # JS Timer — runs entirely in browser
     _preset_btns = "".join(
-        f'<button onclick="htSetTimer({m*60})" style="background:#fef3eb;color:#9a3e15;border:1px solid rgba(194,98,45,0.2);padding:0.2rem 0.65rem;border-radius:999px;font-size:0.75rem;font-weight:600;cursor:pointer;">{m}m</button>'
+        f'<button onclick="htSetTimer({m*60})" style="background:#fef3eb;color:#9a3e15;border:1px solid rgba(194,98,45,0.2);padding:0.2rem 0.65rem;border-radius:999px;font-size:0.75rem;font-weight:600;cursor:pointer;margin:0.1rem;">{m}m</button>'
         for m in [15, 20, 30, 45, 60, 90]
     )
-    st.markdown(f"""
-    <div id="ht-timer-box" style="
-        background: var(--ht-bg-2);
-        border: 1px solid var(--ht-line);
-        border-radius: var(--ht-radius-lg);
-        padding: 1.5rem 1rem 1.2rem;
-        text-align: center;
-        margin: 0.5rem 0 0.75rem 0;
-    ">
-        <div id="ht-timer-display" style="
-            font-size: 3.5rem;
-            font-weight: 700;
-            letter-spacing: -0.03em;
-            color: var(--ht-ink);
-            font-family: var(--ht-mono);
-            line-height: 1;
-            margin-bottom: 0.75rem;
-        ">00:00:00</div>
 
-        <div style="display:flex;justify-content:center;gap:0.5rem;margin-bottom:0.75rem;">
-            <button onclick="htTimerStart()" id="ht-btn-start" style="
-                background:#c2622d;color:#fff;border:none;
-                padding:0.4rem 1.1rem;border-radius:999px;
-                font-size:0.85rem;font-weight:600;cursor:pointer;">▶ Start</button>
-            <button onclick="htTimerPause()" id="ht-btn-pause" style="
-                background:var(--ht-bg-3);color:var(--ht-ink-2);border:1px solid var(--ht-line);
-                padding:0.4rem 1.1rem;border-radius:999px;
-                font-size:0.85rem;font-weight:600;cursor:pointer;">⏸ Pause</button>
-            <button onclick="htTimerReset()" style="
-                background:var(--ht-bg-3);color:var(--ht-ink-2);border:1px solid var(--ht-line);
-                padding:0.4rem 1.1rem;border-radius:999px;
-                font-size:0.85rem;font-weight:600;cursor:pointer;">↺ Reset</button>
-        </div>
+    components.html(f"""
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body {{ margin:0; padding:0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:transparent; }}
+  #timer-box {{ background:#f4f0ea; border:1px solid rgba(28,22,18,0.09); border-radius:16px; padding:1.2rem 1rem 1rem; text-align:center; }}
+  #timer-display {{ font-size:3rem; font-weight:700; letter-spacing:-0.03em; color:#1c1612; font-family:'SF Mono',monospace; line-height:1; margin-bottom:0.7rem; }}
+  .btn-row {{ display:flex; justify-content:center; gap:0.5rem; margin-bottom:0.65rem; flex-wrap:wrap; }}
+  .btn-primary {{ background:#c2622d; color:#fff; border:none; padding:0.38rem 1rem; border-radius:999px; font-size:0.84rem; font-weight:600; cursor:pointer; }}
+  .btn-secondary {{ background:#ebe4da; color:#3d2e24; border:1px solid rgba(28,22,18,0.09); padding:0.38rem 1rem; border-radius:999px; font-size:0.84rem; font-weight:600; cursor:pointer; }}
+  #done-banner {{ display:none; margin-top:0.65rem; }}
+  #done-text {{ color:#1a5c30; font-weight:700; font-size:1rem; }}
+  #elapsed-text {{ font-size:0.8rem; color:#7a6355; margin-top:0.15rem; }}
+</style>
+</head>
+<body>
+<div id="timer-box">
+  <div id="timer-display">00:{str(timer_preset).zfill(2)}:00</div>
+  <div class="btn-row">
+    <button class="btn-primary" onclick="timerStart()">▶ Start</button>
+    <button class="btn-secondary" onclick="timerPause()">⏸ Pause</button>
+    <button class="btn-secondary" onclick="timerReset()">↺ Reset</button>
+  </div>
+  <div class="btn-row">
+    <span style="font-size:0.7rem;color:#7a6355;line-height:2.2;">Preset:</span>
+    {_preset_btns}
+  </div>
+  <div id="done-banner">
+    <div id="done-text">✓ Time's up!</div>
+    <div id="elapsed-text"></div>
+  </div>
+</div>
 
-        <div style="display:flex;justify-content:center;gap:0.4rem;flex-wrap:wrap;">
-            <span style="font-size:0.72rem;color:#717585;margin-right:0.3rem;line-height:2;">Preset:</span>
-            {_preset_btns}
-        </div>
+<script>
+var _total = {timer_preset * 60};
+var _remaining = _total;
+var _interval = null;
+var _running = false;
+var _startTime = null;
 
-        <div id="ht-timer-done" style="display:none;margin-top:0.75rem;">
-            <div style="color:var(--ht-green-text);font-weight:700;font-size:1rem;margin-bottom:0.3rem;">
-                ✓ Time's up!
-            </div>
-            <div id="ht-timer-elapsed" style="font-size:0.82rem;color:var(--ht-ink-3);"></div>
-        </div>
-    </div>
+function fmt(s) {{
+  var h = Math.floor(s/3600);
+  var m = Math.floor((s%3600)/60);
+  var sec = s%60;
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
+}}
 
-    <script>
-    (function() {{
-        let _total = {timer_preset} * 60;
-        let _remaining = _total;
-        let _interval = null;
-        let _running = false;
-        let _elapsed = 0;
-        let _startTime = null;
+function updateDisplay() {{
+  document.getElementById('timer-display').textContent = fmt(_remaining);
+}}
 
-        function _fmt(s) {{
-            let h = Math.floor(s / 3600);
-            let m = Math.floor((s % 3600) / 60);
-            let sec = s % 60;
-            return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+function htSetTimer(seconds) {{
+  timerReset();
+  _total = seconds;
+  _remaining = seconds;
+  updateDisplay();
+}}
+
+function timerStart() {{
+  if (_running) return;
+  _running = true;
+  _startTime = _startTime || Date.now();
+  _interval = setInterval(function() {{
+    if (_remaining <= 0) {{
+      clearInterval(_interval);
+      _running = false;
+      document.getElementById('timer-display').style.color = '#1a5c30';
+      var elapsed = Math.round((Date.now() - _startTime) / 1000);
+      document.getElementById('elapsed-text').textContent = 'Elapsed: ~' + Math.round(elapsed/60) + ' min';
+      document.getElementById('done-banner').style.display = 'block';
+      try {{
+        var ctx = new (window.AudioContext || window.webkitAudioContext)();
+        for (var i=0; i<3; i++) {{
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.frequency.value = 880;
+          gain.gain.setValueAtTime(0.3, ctx.currentTime + i*0.4);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i*0.4 + 0.3);
+          osc.start(ctx.currentTime + i*0.4);
+          osc.stop(ctx.currentTime + i*0.4 + 0.3);
         }}
+      }} catch(e) {{}}
+      return;
+    }}
+    _remaining--;
+    updateDisplay();
+  }}, 1000);
+}}
 
-        function _update() {{
-            document.getElementById('ht-timer-display').textContent = _fmt(_remaining);
-        }}
+function timerPause() {{
+  if (!_running) return;
+  clearInterval(_interval);
+  _running = false;
+}}
 
-        window.htSetTimer = function(seconds) {{
-            htTimerReset();
-            _total = seconds;
-            _remaining = seconds;
-            _update();
-        }};
+function timerReset() {{
+  clearInterval(_interval);
+  _running = false;
+  _remaining = _total;
+  _startTime = null;
+  updateDisplay();
+  document.getElementById('done-banner').style.display = 'none';
+  document.getElementById('timer-display').style.color = '#1c1612';
+}}
 
-        window.htTimerStart = function() {{
-            if (_running) return;
-            _running = true;
-            _startTime = _startTime || Date.now();
-            _interval = setInterval(function() {{
-                if (_remaining <= 0) {{
-                    clearInterval(_interval);
-                    _running = false;
-                    _remaining = 0;
-                    _update();
-                    _elapsed = Math.round((Date.now() - _startTime) / 1000);
-                    // Beep
-                    try {{
-                        let ctx = new (window.AudioContext || window.webkitAudioContext)();
-                        for (let i = 0; i < 3; i++) {{
-                            let osc = ctx.createOscillator();
-                            let gain = ctx.createGain();
-                            osc.connect(gain);
-                            gain.connect(ctx.destination);
-                            osc.frequency.value = 880;
-                            gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.4);
-                            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.4 + 0.3);
-                            osc.start(ctx.currentTime + i * 0.4);
-                            osc.stop(ctx.currentTime + i * 0.4 + 0.3);
-                        }}
-                    }} catch(e) {{}}
-                    // Show done banner
-                    document.getElementById('ht-timer-done').style.display = 'block';
-                    let elMin = Math.round(_elapsed / 60);
-                    document.getElementById('ht-timer-elapsed').textContent = 'Elapsed: ~' + elMin + ' min';
-                    document.getElementById('ht-timer-display').style.color = 'var(--ht-green-text)';
-                    return;
-                }}
-                _remaining--;
-                _update();
-            }}, 1000);
-        }};
-
-        window.htTimerPause = function() {{
-            if (!_running) return;
-            clearInterval(_interval);
-            _running = false;
-        }};
-
-        window.htTimerReset = function() {{
-            clearInterval(_interval);
-            _running = false;
-            _remaining = _total;
-            _elapsed = 0;
-            _startTime = null;
-            _update();
-            document.getElementById('ht-timer-done').style.display = 'none';
-            document.getElementById('ht-timer-display').style.color = 'var(--ht-ink)';
-        }};
-
-        _update();
-    }})();
-    </script>
-    """, unsafe_allow_html=True)
+updateDisplay();
+</script>
+</body>
+</html>
+""", height=260)
 
     # Log button — Streamlit side
     if selected_timer_habit_id is not None:
