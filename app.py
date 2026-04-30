@@ -2365,6 +2365,12 @@ init_db()
 # Single user mode — multi-user login coming later
 current_user_id = "default_user"
 
+# Clear cache when the date changes (ensures daily habits reset correctly)
+_today_str = date.today().isoformat()
+if st.session_state.get("_cached_date") != _today_str:
+    st.cache_data.clear()
+    st.session_state["_cached_date"] = _today_str
+
 # Custom SVG favicon — terracotta checkmark circle
 st.markdown("""
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23fef3eb' stroke='%23e8a87c' stroke-width='1.5'/%3E%3Cpath d='M9 16.5l5 5 9-9' stroke='%23c2622d' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
