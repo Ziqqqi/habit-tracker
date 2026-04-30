@@ -2440,6 +2440,10 @@ with st.expander("⏱ Timer", expanded=False):
         )
 
     # JS Timer — runs entirely in browser, no Streamlit rerenders
+    _preset_btns = "".join(
+        f'<button onclick="htSetTimer({m*60})" style="background:#fef3eb;color:#9a3e15;border:1px solid rgba(194,98,45,0.2);padding:0.2rem 0.65rem;border-radius:999px;font-size:0.75rem;font-weight:600;cursor:pointer;">{m}m</button>'
+        for m in [15, 20, 30, 45, 60, 90]
+    )
     st.markdown(f"""
     <div id="ht-timer-box" style="
         background: var(--ht-bg-2);
@@ -2475,8 +2479,8 @@ with st.expander("⏱ Timer", expanded=False):
         </div>
 
         <div style="display:flex;justify-content:center;gap:0.4rem;flex-wrap:wrap;">
-            <span style="font-size:0.72rem;color:var(--ht-ink-3);margin-right:0.3rem;line-height:2;">Preset:</span>
-            {"".join(f'<button onclick="htSetTimer({m*60})" style="background:var(--ht-accent-2);color:var(--ht-accent-text);border:1px solid rgba(194,98,45,0.2);padding:0.2rem 0.65rem;border-radius:999px;font-size:0.75rem;font-weight:600;cursor:pointer;">{m}m</button>' for m in [15, 20, 30, 45, 60, 90])}
+            <span style="font-size:0.72rem;color:#717585;margin-right:0.3rem;line-height:2;">Preset:</span>
+            {_preset_btns}
         </div>
 
         <div id="ht-timer-done" style="display:none;margin-top:0.75rem;">
